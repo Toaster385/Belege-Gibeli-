@@ -7,412 +7,500 @@
   <title>Belegverwaltung</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet"/>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body{font-family:'DM Mono',monospace;background:#f4f4f4;}
-    input,select,textarea{outline:none;}
+    body{font-family:'DM Mono',monospace;background:#f4f4f4;color:#000;}
+    input,select,textarea{outline:none;font-family:'DM Mono',monospace;}
     input:focus,select:focus,textarea:focus{border-color:#000!important;}
+    .hcard:hover{border-color:#000!important;}
     @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-    .hcard:hover{border-color:#000!important}
     ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#ddd;border-radius:99px}
+    .anim{animation:fadein .3s ease;}
+    button{cursor:pointer;font-family:'DM Mono',monospace;}
   </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useRef, useEffect } = React;
-
-```
+<div id="app"></div>
+<script>
 const SUPABASE_URL = "https://ircbccxymbujiititlki.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyY2JjY3h5bWJ1amlpdGl0bGtpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4OTI2NDEsImV4cCI6MjA5MDQ2ODY0MX0.KTX35NCGDF1zJoojSruLG8SmF0TUShg26tl3S3MYc20";
 
-// ── ADMIN ZUGANGSDATEN — hier ändern! ──────────────────────────────────────
+// ── ADMIN ZUGANGSDATEN — hier ändern! ─────────────────────────────────────
 const ADMINS = [
-  { name: "Admin1", password: "passwort1" },
-  { name: "Admin2", password: "passwort2" },
-  { name: "Admin3", password: "passwort3" },
+{ name: “Admin1”, password: “passwort1” },
+{ name: “Admin2”, password: “passwort2” },
+{ name: “Admin3”, password: “passwort3” },
 ];
 
-async function sb(method, table, body, query="") {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}`, {
-    method,
-    headers: {"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json","Prefer":"return=representation"},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const text = await res.text();
-  return text ? JSON.parse(text) : [];
+// ── State ─────────────────────────────────────────────────────────────────
+let state = {
+user: null, admin: null,
+screen: “auth”, // auth | user_list | user_add | user_detail | admin_belege | admin_users
+belege: [], users: [],
+selected: null, search: “”, filterStatus: “Alle”,
+authMode: “login”, authName: “”, authBday: “”, authErr: “”, authLoading: false,
+aname: “”, apw: “”,
+title: “”, amount: “”, currency: “CHF”, date: new Date().toISOString().slice(0,10), note: “”,
+file: null, fileSrc: null,
+toast: “”, saving: false, loadingData: false,
+tab: “belege”
+};
+
+function setState(patch) { Object.assign(state, patch); render(); }
+
+// ── Supabase ──────────────────────────────────────────────────────────────
+async function sb(method, table, body, query=””) {
+const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}`, {
+method,
+headers: {“apikey”:SUPABASE_KEY,“Authorization”:`Bearer ${SUPABASE_KEY}`,“Content-Type”:“application/json”,“Prefer”:“return=representation”},
+body: body ? JSON.stringify(body) : undefined
+});
+if (!res.ok) throw new Error(await res.text());
+const t = await res.text(); return t ? JSON.parse(t) : [];
+}
+const getUsers    = () => sb(“GET”,“users”,null,”?select=*”);
+const getBelege   = () => sb(“GET”,“belege”,null,”?select=*&order=submitted_at.desc”);
+const insertUser  = u => sb(“POST”,“users”,u);
+const insertBeleg = b => sb(“POST”,“belege”,b);
+const updateBeleg = (id,d) => sb(“PATCH”,“belege”,d,`?id=eq.${id}`);
+const delBeleg    = id => sb(“DELETE”,“belege”,null,`?id=eq.${id}`);
+const delUser     = async id => { await sb(“DELETE”,“belege”,null,`?user_id=eq.${id}`); await sb(“DELETE”,“users”,null,`?id=eq.${id}`); };
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function uid() { return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function belegNr(n) { return “BLG-”+(n+1).toString().padStart(5,“0”); }
+function nowISO() { return new Date().toISOString(); }
+function fmtDT(iso) { if(!iso)return”—”; const d=new Date(iso); return d.toLocaleDateString(“de-CH”,{day:“2-digit”,month:“2-digit”,year:“numeric”})+” “+d.toLocaleTimeString(“de-CH”,{hour:“2-digit”,minute:“2-digit”}); }
+function fmtDate(s) { if(!s)return”—”; return new Date(s).toLocaleDateString(“de-CH”,{day:“2-digit”,month:“2-digit”,year:“numeric”}); }
+function fmtAmt(n,c) { if(n===””||n==null)return”—”; return (c||“CHF”)+” “+Number(n).toFixed(2); }
+function isDup(list,b) { return list.some(e=>e.amount===b.amount&&e.currency===b.currency&&e.date===b.date&&e.title.toLowerCase()===b.title.toLowerCase()); }
+function fileToB64(f) { return new Promise((r,j)=>{const x=new FileReader();x.onload=()=>r(x.result);x.onerror=j;x.readAsDataURL(f);}); }
+
+function showToast(msg) {
+setState({toast:msg});
+setTimeout(()=>setState({toast:””}), 2500);
 }
 
-const getUsers    = () => sb("GET","users",null,"?select=*");
-const getBelege   = () => sb("GET","belege",null,"?select=*&order=submitted_at.desc");
-const insertUser  = (u) => sb("POST","users",u);
-const insertBeleg = (b) => sb("POST","belege",b);
-const updateBeleg = (id,d) => sb("PATCH","belege",d,`?id=eq.${id}`);
-const delBeleg    = (id) => sb("DELETE","belege",null,`?id=eq.${id}`);
-const delUser     = async(id) => { await sb("DELETE","belege",null,`?user_id=eq.${id}`); await sb("DELETE","users",null,`?id=eq.${id}`); };
-
-function uid()       { return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
-function belegNr(n)  { return "BLG-"+(n+1).toString().padStart(5,"0"); }
-function nowISO()    { return new Date().toISOString(); }
-function fmtDT(iso)  { if(!iso)return"—"; const d=new Date(iso); return d.toLocaleDateString("de-CH",{day:"2-digit",month:"2-digit",year:"numeric"})+" "+d.toLocaleTimeString("de-CH",{hour:"2-digit",minute:"2-digit"}); }
-function fmtDate(s)  { if(!s)return"—"; return new Date(s).toLocaleDateString("de-CH",{day:"2-digit",month:"2-digit",year:"numeric"}); }
-function fmtAmt(n,c) { if(n===""||n==null)return"—"; return (c||"CHF")+" "+Number(n).toFixed(2); }
-function fileToB64(f){ return new Promise((r,j)=>{ const x=new FileReader(); x.onload=()=>r(x.result); x.onerror=j; x.readAsDataURL(f); }); }
-function isDup(list,b){ return list.some(e=>e.id!==b.id&&e.amount===b.amount&&e.currency===b.currency&&e.date===b.date&&e.title.toLowerCase()===b.title.toLowerCase()); }
-
-const F={mono:"'DM Mono',monospace",serif:"'Playfair Display',serif"};
-const C={bg:"#f4f4f4",surface:"#fff",border:"#e0e0e0",muted:"#999",danger:"#c00",warn:"#b86800",ok:"#1a7a3a"};
-const inp={width:"100%",background:"#fff",border:`1px solid ${C.border}`,borderRadius:6,padding:"9px 12px",color:"#000",fontSize:13,fontFamily:F.mono};
-const lbl={fontSize:10,color:C.muted,letterSpacing:1.4,marginBottom:5,display:"block"};
-function B(v){const b={fontFamily:F.mono,fontSize:11,letterSpacing:.8,cursor:"pointer",borderRadius:6,padding:"8px 16px",fontWeight:500};
-  if(v==="primary")return{...b,background:"#000",color:"#fff",border:"none"};
-  if(v==="ghost")  return{...b,background:"#fff",color:"#666",border:`1px solid ${C.border}`};
-  if(v==="danger") return{...b,background:"#fff",color:C.danger,border:"1px solid #fcc"};
-  if(v==="warn")   return{...b,background:"#fff",color:C.warn,border:"1px solid #f5dba0"};
-  if(v==="ok")     return{...b,background:"#fff",color:C.ok,border:"1px solid #a0d4b0"};
-  return b;}
-
-function Toast({msg,onDone}){
-  useEffect(()=>{const t=setTimeout(onDone,2500);return()=>clearTimeout(t);},[]);
-  return <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"#000",color:"#fff",padding:"10px 22px",borderRadius:99,fontSize:12,fontFamily:F.mono,zIndex:999,boxShadow:"0 4px 20px #0002",whiteSpace:"nowrap"}}>{msg}</div>;
+// ── CSS helpers ───────────────────────────────────────────────────────────
+const C = {bg:”#f4f4f4”,surface:”#fff”,border:”#e0e0e0”,muted:”#999”,danger:”#c00”,warn:”#b86800”,ok:”#1a7a3a”};
+function inp(extra=””) { return `width:100%;background:#fff;border:1px solid ${C.border};border-radius:6px;padding:9px 12px;color:#000;font-size:13px;font-family:'DM Mono',monospace;${extra}`; }
+function btnStyle(v) {
+const base = “font-family:‘DM Mono’,monospace;font-size:11px;letter-spacing:.8px;border-radius:6px;padding:8px 16px;font-weight:500;”;
+if(v===“primary”) return base+“background:#000;color:#fff;border:none;”;
+if(v===“ghost”)   return base+`background:#fff;color:#666;border:1px solid ${C.border};`;
+if(v===“danger”)  return base+“background:#fff;color:#c00;border:1px solid #fcc;”;
+if(v===“warn”)    return base+“background:#fff;color:#b86800;border:1px solid #f5dba0;”;
+if(v===“ok”)      return base+“background:#fff;color:#1a7a3a;border:1px solid #a0d4b0;”;
+return base;
+}
+function badge(label, color) {
+const m = {green:“background:#e6f4ec;color:#1a7a3a;border-color:#a0d4b0;”,yellow:“background:#fdf6e3;color:#b86800;border-color:#f5dba0;”,gray:“background:#f0f0f0;color:#888;border-color:#ddd;”};
+return `<span style="font-size:10px;padding:2px 9px;border-radius:99px;border:1px solid;${m[color]||m.gray}font-family:'DM Mono',monospace;letter-spacing:.5px;white-space:nowrap;">${label}</span>`;
 }
 
-function Badge({label,color}){
-  const m={green:{bg:"#e6f4ec",text:"#1a7a3a",border:"#a0d4b0"},yellow:{bg:"#fdf6e3",text:"#b86800",border:"#f5dba0"},gray:{bg:"#f0f0f0",text:"#888",border:"#ddd"}};
-  const c=m[color]||m.gray;
-  return <span style={{fontSize:10,padding:"2px 9px",borderRadius:99,border:`1px solid ${c.border}`,background:c.bg,color:c.text,fontFamily:F.mono,letterSpacing:.5,whiteSpace:"nowrap"}}>{label}</span>;
+// ── Auth ──────────────────────────────────────────────────────────────────
+async function submitUser() {
+if(!state.authName.trim()) { setState({authErr:“Bitte Name eingeben.”}); return; }
+if(!state.authBday) { setState({authErr:“Bitte Geburtsdatum eingeben.”}); return; }
+setState({authLoading:true, authErr:””});
+try {
+const users = await getUsers();
+const key = state.authName.trim().toLowerCase()+”|”+state.authBday;
+if(state.authMode===“register”) {
+if(users.some(u=>u.display_name.toLowerCase()===state.authName.trim().toLowerCase())) { setState({authErr:“Name bereits vergeben.”,authLoading:false}); return; }
+if(users.find(u=>u.id===key)) { setState({authErr:“Konto existiert bereits.”,authLoading:false}); return; }
+await insertUser({id:key,display_name:state.authName.trim(),bday:state.authBday,created_at:nowISO()});
+setState({user:{id:key,displayName:state.authName.trim(),bday:state.authBday},screen:“user_list”,authLoading:false,loadingData:true});
+loadUserBelege(key);
+} else {
+const u = users.find(u=>u.id===key);
+if(!u) { setState({authErr:“Kein Konto gefunden. Bitte registrieren.”,authLoading:false}); return; }
+setState({user:{id:u.id,displayName:u.display_name,bday:u.bday},screen:“user_list”,authLoading:false,loadingData:true});
+loadUserBelege(u.id);
+}
+} catch(e) { setState({authErr:“Verbindungsfehler: “+e.message,authLoading:false}); }
 }
 
-function FilePreview({src,name}){
-  if(!src)return null;
-  if(src.startsWith("data:application/pdf"))return <a href={src} download={name} style={{color:"#000",fontSize:12,fontFamily:F.mono,textDecoration:"underline"}}>📄 PDF herunterladen</a>;
-  if(src.startsWith("data:text/html")||(name||"").endsWith(".html")){let h="";try{h=atob(src.split(",")[1]);}catch{}return <iframe srcDoc={h} title="Beleg" style={{width:"100%",height:300,border:`1px solid ${C.border}`,borderRadius:6,marginTop:8}} sandbox="allow-same-origin"/>;}
-  return <img src={src} alt="Beleg" style={{maxWidth:"100%",maxHeight:200,borderRadius:4,marginTop:8,border:`1px solid ${C.border}`,objectFit:"contain"}}/>;
+function submitAdmin() {
+const a = ADMINS.find(a=>a.name.toLowerCase()===state.aname.trim().toLowerCase()&&a.password===state.apw);
+if(!a) { setState({authErr:“Ungültige Zugangsdaten.”}); return; }
+setState({admin:a,screen:“admin_belege”,loadingData:true});
+loadAdminData();
 }
 
-// ── AUTH ────────────────────────────────────────────────────────────────────
-function AuthScreen({onLogin,onAdminLogin}){
-  const[mode,setMode]=useState("login");
-  const[name,setName]=useState("");const[bday,setBday]=useState("");
-  const[aname,setAname]=useState("");const[apw,setApw]=useState("");
-  const[err,setErr]=useState("");const[loading,setLoading]=useState(false);
+async function loadUserBelege(uid) {
+const all = await getBelege();
+setState({belege:all.filter(b=>b.user_id===uid),loadingData:false});
+}
 
-  async function submitUser(){
-    setErr("");setLoading(true);
-    if(!name.trim()){setErr("Bitte Name eingeben.");setLoading(false);return;}
-    if(!bday){setErr("Bitte Geburtsdatum eingeben.");setLoading(false);return;}
-    try{
-      const users=await getUsers();
-      const key=name.trim().toLowerCase()+"|"+bday;
-      if(mode==="register"){
-        if(users.some(u=>u.display_name.toLowerCase()===name.trim().toLowerCase())){setErr("Name bereits vergeben.");setLoading(false);return;}
-        if(users.find(u=>u.id===key)){setErr("Konto existiert bereits.");setLoading(false);return;}
-        await insertUser({id:key,display_name:name.trim(),bday,created_at:nowISO()});
-        onLogin({id:key,displayName:name.trim(),bday});
-      }else{
-        const u=users.find(u=>u.id===key);
-        if(!u){setErr("Kein Konto gefunden. Bitte registrieren.");setLoading(false);return;}
-        onLogin({id:u.id,displayName:u.display_name,bday:u.bday});
-      }
-    }catch(e){setErr("Verbindungsfehler: "+e.message);}
-    setLoading(false);
-  }
+async function loadAdminData() {
+const [b,u] = await Promise.all([getBelege(),getUsers()]);
+setState({belege:b,users:u,loadingData:false});
+}
 
-  function submitAdmin(){
-    setErr("");
-    const a=ADMINS.find(a=>a.name.toLowerCase()===aname.trim().toLowerCase()&&a.password===apw);
-    if(!a){setErr("Ungültige Zugangsdaten.");return;}
-    onAdminLogin(a);
-  }
+// ── Actions ───────────────────────────────────────────────────────────────
+async function addBeleg() {
+if(!state.title.trim()) { showToast(“Bitte Titel eingeben.”); return; }
+setState({saving:true});
+try {
+const all = await getBelege();
+let src = null;
+if(state.file) { try { src = await fileToB64(state.file); } catch{} }
+const b = {id:uid(),beleg_nr:belegNr(all.length),user_id:state.user.id,user_name:state.user.displayName,
+title:state.title.trim(),amount:state.amount.toString(),currency:state.currency,date:state.date,
+note:state.note,file_src:src,file_name:state.file?.name||null,submitted_at:nowISO(),verified:false,
+duplicate:isDup(all.filter(x=>x.user_id===state.user.id),{title:state.title.trim(),amount:state.amount.toString(),currency:state.currency,date:state.date})};
+await insertBeleg(b);
+setState({belege:[b,…state.belege],screen:“user_list”,title:””,amount:””,currency:“CHF”,
+date:new Date().toISOString().slice(0,10),note:””,file:null,fileSrc:null,saving:false});
+showToast(b.duplicate?“⚠️ Gespeichert — mögliches Duplikat!”:“Beleg gespeichert ✓”);
+} catch(e) { showToast(“Fehler: “+e.message); setState({saving:false}); }
+}
 
-  return(
-    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{width:380,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"40px 36px",boxShadow:"0 2px 24px #0000000a"}}>
-        <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{fontSize:28,marginBottom:8}}>🧾</div>
-          <div style={{fontFamily:F.serif,fontSize:22,fontWeight:900}}>Belegverwaltung</div>
-          <div style={{fontSize:10,color:C.muted,marginTop:4,letterSpacing:1.5}}>DIGITAL · SICHER · ÜBERSICHTLICH</div>
+async function toggleVerify(id) {
+const b = state.belege.find(x=>x.id===id); if(!b) return;
+const updated = {…b,verified:!b.verified};
+await updateBeleg(id,{verified:updated.verified});
+setState({belege:state.belege.map(x=>x.id===id?updated:x),selected:updated});
+showToast(updated.verified?“Beleg verifiziert ✓”:“Verifizierung aufgehoben”);
+}
+
+async function toggleDup(id) {
+const b = state.belege.find(x=>x.id===id); if(!b) return;
+const updated = {…b,duplicate:!b.duplicate};
+await updateBeleg(id,{duplicate:updated.duplicate});
+setState({belege:state.belege.map(x=>x.id===id?updated:x),selected:updated});
+showToast(“Duplikat-Status aktualisiert”);
+}
+
+async function handleDelBeleg(id) {
+if(!confirm(“Beleg wirklich löschen?”)) return;
+await delBeleg(id);
+setState({belege:state.belege.filter(x=>x.id!==id),selected:null,screen:“admin_belege”});
+showToast(“Beleg gelöscht.”);
+}
+
+async function handleDelUser(id, name) {
+if(!confirm(`Konto von ${name} und alle Belege löschen?`)) return;
+await delUser(id);
+setState({users:state.users.filter(u=>u.id!==id),belege:state.belege.filter(b=>b.user_id!==id)});
+showToast(“Konto gelöscht.”);
+}
+
+// ── File input ─────────────────────────────────────────────────────────────
+function handleFileChange(e) {
+const f = e.target.files[0]; if(!f) return;
+if(f.size>4000000) { showToast(“Datei max. 4 MB.”); return; }
+fileToB64(f).then(src => setState({file:f,fileSrc:src}));
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function render() {
+const app = document.getElementById(“app”);
+const s = state;
+
+if(s.screen === “auth”) { app.innerHTML = renderAuth(); return; }
+if(s.screen === “user_list”) { app.innerHTML = renderUserList(); return; }
+if(s.screen === “user_add”) { app.innerHTML = renderUserAdd(); return; }
+if(s.screen === “user_detail”) { app.innerHTML = renderUserDetail(); return; }
+if(s.screen === “admin_belege” || s.screen === “admin_users”) { app.innerHTML = renderAdmin(); return; }
+}
+
+// ── Auth screen ───────────────────────────────────────────────────────────
+function renderAuth() {
+const s = state;
+const isAdmin = s.authMode === “admin”;
+return `
+
+  <div style="min-height:100vh;background:${C.bg};display:flex;align-items:center;justify-content:center;">
+    <div style="width:380px;background:#fff;border:1px solid ${C.border};border-radius:14px;padding:40px 36px;box-shadow:0 2px 24px #0000000a;">
+      <div style="text-align:center;margin-bottom:28px;">
+        <div style="font-size:28px;margin-bottom:8px;">🧾</div>
+        <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:900;">Belegverwaltung</div>
+        <div style="font-size:10px;color:${C.muted};margin-top:4px;letter-spacing:1.5px;">DIGITAL · SICHER · ÜBERSICHTLICH</div>
+      </div>
+      ${isAdmin ? `
+        <div style="text-align:center;margin-bottom:20px;font-size:11px;color:${C.muted};letter-spacing:1px;">ADMIN-BEREICH</div>
+        <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">ADMIN-NAME</label>
+          <input id="aname" style="${inp()}" value="${s.aname}" oninput="setState({aname:this.value})" onkeydown="if(event.key==='Enter')submitAdmin()"/></div>
+        <div style="margin-bottom:20px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">PASSWORT</label>
+          <input id="apw" type="password" style="${inp()}" value="${s.apw}" oninput="setState({apw:this.value})" onkeydown="if(event.key==='Enter')submitAdmin()"/></div>
+        ${s.authErr?`<div style="color:${C.danger};font-size:12px;margin-bottom:10px;">${s.authErr}</div>`:""}
+        <button style="${btnStyle("primary")}width:100%;padding:11px 0;font-size:12px;letter-spacing:1px;" onclick="submitAdmin()">ALS ADMIN ANMELDEN</button>
+        <div style="text-align:center;margin-top:16px;"><span style="font-size:11px;color:${C.muted};cursor:pointer;text-decoration:underline;" onclick="setState({authMode:'login',authErr:''})">← Zurück</span></div>
+      ` : `
+        <div style="display:flex;margin-bottom:24px;border:1px solid ${C.border};border-radius:6px;overflow:hidden;">
+          <button style="flex:1;padding:9px 0;background:${s.authMode==="login"?"#000":"#fff"};color:${s.authMode==="login"?"#fff":"#999"};border:none;font-size:11px;letter-spacing:1px;font-weight:500;" onclick="setState({authMode:'login',authErr:''})">ANMELDEN</button>
+          <button style="flex:1;padding:9px 0;background:${s.authMode==="register"?"#000":"#fff"};color:${s.authMode==="register"?"#fff":"#999"};border:none;font-size:11px;letter-spacing:1px;font-weight:500;" onclick="setState({authMode:'register',authErr:''})">REGISTRIEREN</button>
         </div>
-        {mode!=="admin"?(
-          <>
-            <div style={{display:"flex",marginBottom:24,border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>
-              {["login","register"].map(m=>(
-                <button key={m} onClick={()=>{setMode(m);setErr("");}} style={{flex:1,padding:"9px 0",background:mode===m?"#000":"#fff",color:mode===m?"#fff":"#999",border:"none",cursor:"pointer",fontSize:11,letterSpacing:1,fontFamily:F.mono,fontWeight:500}}>
-                  {m==="login"?"ANMELDEN":"REGISTRIEREN"}
-                </button>
-              ))}
-            </div>
-            <div style={{marginBottom:14}}><label style={lbl}>NAME</label><input style={inp} type="text" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitUser()} placeholder="Vor- und Nachname"/></div>
-            <div style={{marginBottom:20}}><label style={lbl}>GEBURTSDATUM</label><input style={inp} type="date" value={bday} onChange={e=>setBday(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitUser()}/></div>
-            {err&&<div style={{color:C.danger,fontSize:12,marginBottom:10}}>{err}</div>}
-            <button onClick={submitUser} disabled={loading} style={{...B("primary"),width:"100%",padding:"11px 0",fontSize:12,letterSpacing:1,opacity:loading?.5:1}}>
-              {loading?"…":mode==="login"?"ANMELDEN":"KONTO ERSTELLEN"}
-            </button>
-            <div style={{textAlign:"center",marginTop:20}}>
-              <span onClick={()=>{setMode("admin");setErr("");}} style={{fontSize:11,color:C.muted,cursor:"pointer",textDecoration:"underline"}}>Admin-Zugang →</span>
-            </div>
-          </>
-        ):(
-          <>
-            <div style={{textAlign:"center",marginBottom:20,fontSize:11,color:C.muted,letterSpacing:1}}>ADMIN-BEREICH</div>
-            <div style={{marginBottom:14}}><label style={lbl}>ADMIN-NAME</label><input style={inp} type="text" value={aname} onChange={e=>setAname(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitAdmin()}/></div>
-            <div style={{marginBottom:20}}><label style={lbl}>PASSWORT</label><input style={inp} type="password" value={apw} onChange={e=>setApw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitAdmin()}/></div>
-            {err&&<div style={{color:C.danger,fontSize:12,marginBottom:10}}>{err}</div>}
-            <button onClick={submitAdmin} style={{...B("primary"),width:"100%",padding:"11px 0",fontSize:12,letterSpacing:1}}>ALS ADMIN ANMELDEN</button>
-            <div style={{textAlign:"center",marginTop:16}}><span onClick={()=>{setMode("login");setErr("");}} style={{fontSize:11,color:C.muted,cursor:"pointer",textDecoration:"underline"}}>← Zurück</span></div>
-          </>
-        )}
+        <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">NAME</label>
+          <input style="${inp()}" placeholder="Vor- und Nachname" value="${s.authName}" oninput="setState({authName:this.value})" onkeydown="if(event.key==='Enter')submitUser()"/></div>
+        <div style="margin-bottom:20px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">GEBURTSDATUM</label>
+          <input type="date" style="${inp()}" value="${s.authBday}" oninput="setState({authBday:this.value})" onkeydown="if(event.key==='Enter')submitUser()"/></div>
+        ${s.authErr?`<div style="color:${C.danger};font-size:12px;margin-bottom:10px;">${s.authErr}</div>`:""}
+        <button style="${btnStyle("primary")}width:100%;padding:11px 0;font-size:12px;letter-spacing:1px;opacity:${s.authLoading?.5:1};" onclick="submitUser()">${s.authLoading?"…":s.authMode==="login"?"ANMELDEN":"KONTO ERSTELLEN"}</button>
+        <div style="text-align:center;margin-top:20px;"><span style="font-size:11px;color:${C.muted};cursor:pointer;text-decoration:underline;" onclick="setState({authMode:'admin',authErr:''})">Admin-Zugang →</span></div>
+      `}
+    </div>
+  </div>`;
+}
+
+// ── User list ─────────────────────────────────────────────────────────────
+function renderUserList() {
+const s = state;
+if(s.loadingData) return `<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-size:12px;color:${C.muted};">Laden…</div>`;
+const filtered = s.belege.filter(b => {
+const q = s.search.toLowerCase();
+return !q || b.title.toLowerCase().includes(q) || (b.note||””).toLowerCase().includes(q) || b.beleg_nr.toLowerCase().includes(q);
+});
+const totalCHF = s.belege.filter(b=>b.currency===“CHF”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0);
+const totalEUR = s.belege.filter(b=>b.currency===“EUR”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0);
+return `
+
+  <div style="min-height:100vh;background:${C.bg};">
+    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">🧾 Belege</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;color:${C.muted};">👤 ${s.user.displayName}</span>
+        <button style="${btnStyle("ghost")}" onclick="setState({user:null,screen:'auth',belege:[],search:''})">ABMELDEN</button>
+        <button style="${btnStyle("primary")}" onclick="setState({screen:'user_add'})">+ NEU</button>
       </div>
     </div>
-  );
-}
-
-// ── USER APP ────────────────────────────────────────────────────────────────
-function UserApp({user,onLogout}){
-  const[belege,setBelege]=useState([]);const[view,setView]=useState("list");const[selected,setSelected]=useState(null);
-  const[search,setSearch]=useState("");const[toast,setToast]=useState("");const[saving,setSaving]=useState(false);const[loadingData,setLoadingData]=useState(true);
-  const[title,setTitle]=useState("");const[amount,setAmount]=useState("");const[currency,setCurrency]=useState("CHF");
-  const[date,setDate]=useState(new Date().toISOString().slice(0,10));const[note,setNote]=useState("");
-  const[file,setFile]=useState(null);const[fileSrc,setFileSrc]=useState(null);const fileRef=useRef();
-
-  useEffect(()=>{getBelege().then(all=>{setBelege(all.filter(b=>b.user_id===user.id));setLoadingData(false);}).catch(()=>setLoadingData(false));},[]);
-
-  const filtered=belege.filter(b=>{const q=search.toLowerCase();return !q||b.title.toLowerCase().includes(q)||(b.note||"").toLowerCase().includes(q)||b.beleg_nr.toLowerCase().includes(q);});
-  const totalCHF=belege.filter(b=>b.currency==="CHF").reduce((s,b)=>s+(parseFloat(b.amount)||0),0);
-  const totalEUR=belege.filter(b=>b.currency==="EUR").reduce((s,b)=>s+(parseFloat(b.amount)||0),0);
-
-  async function addBeleg(){
-    if(!title.trim()){setToast("Bitte Titel eingeben.");return;}
-    setSaving(true);
-    try{
-      const all=await getBelege();
-      let src=null;if(file){try{src=await fileToB64(file);}catch{}}
-      const b={id:uid(),beleg_nr:belegNr(all.length),user_id:user.id,user_name:user.displayName,title:title.trim(),amount:amount.toString(),currency,date,note,file_src:src,file_name:file?.name||null,submitted_at:nowISO(),verified:false,duplicate:isDup(all.filter(x=>x.user_id===user.id),{title:title.trim(),amount:amount.toString(),currency,date})};
-      await insertBeleg(b);
-      setBelege([b,...belege]);
-      setTitle("");setAmount("");setCurrency("CHF");setDate(new Date().toISOString().slice(0,10));setNote("");setFile(null);setFileSrc(null);
-      setView("list");setToast(b.duplicate?"⚠️ Gespeichert — mögliches Duplikat!":"Beleg gespeichert ✓");
-    }catch(e){setToast("Fehler: "+e.message);}
-    setSaving(false);
-  }
-
-  if(loadingData)return <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontSize:12,color:C.muted}}>Laden…</div>;
-
-  return(
-    <div style={{minHeight:"100vh",background:C.bg}}>
-      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"13px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{fontFamily:F.serif,fontSize:17,fontWeight:900}}>🧾 Belege</div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:11,color:C.muted}}>👤 {user.displayName}</span>
-          <button style={B("ghost")} onClick={onLogout}>ABMELDEN</button>
-          {view==="list"?<button style={B("primary")} onClick={()=>setView("add")}>+ NEU</button>:<button style={B("ghost")} onClick={()=>{setView("list");setSelected(null);}}>← ZURÜCK</button>}
-        </div>
+    <div style="max-width:660px;margin:0 auto;padding:22px 16px;" class="anim">
+      <div style="display:flex;gap:10px;margin-bottom:18px;">
+        ${[["BELEGE",s.belege.length],["TOTAL CHF","CHF "+totalCHF.toFixed(2)],["TOTAL EUR","EUR "+totalEUR.toFixed(2)]].map(([l,v])=>`
+        <div style="flex:1;background:#fff;border:1px solid ${C.border};border-radius:8px;padding:12px 14px;">
+          <div style="font-size:9px;color:${C.muted};letter-spacing:1.5px;margin-bottom:3px;">${l}</div>
+          <div style="font-size:15px;font-weight:500;">${v}</div>
+        </div>`).join("")}
       </div>
-
-      {view==="list"&&(
-        <div style={{maxWidth:660,margin:"0 auto",padding:"22px 16px",animation:"fadein .3s ease"}}>
-          <div style={{display:"flex",gap:10,marginBottom:18}}>
-            {[{label:"BELEGE",val:belege.length},{label:"TOTAL CHF",val:"CHF "+totalCHF.toFixed(2)},{label:"TOTAL EUR",val:"EUR "+totalEUR.toFixed(2)}].map(c=>(
-              <div key={c.label} style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px"}}>
-                <div style={{fontSize:9,color:C.muted,letterSpacing:1.5,marginBottom:3}}>{c.label}</div>
-                <div style={{fontSize:15,fontWeight:500}}>{c.val}</div>
-              </div>
-            ))}
-          </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Suchen…" style={{...inp,marginBottom:14}}/>
-          {filtered.length===0&&<div style={{textAlign:"center",color:"#ccc",fontSize:13,marginTop:50}}>{belege.length===0?"Noch keine Belege — erstelle deinen ersten!":"Keine Treffer."}</div>}
-          {filtered.map(b=>(
-            <div key={b.id} className="hcard" style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"13px 16px",cursor:"pointer",marginBottom:8,transition:"border-color .15s"}} onClick={()=>{setSelected(b);setView("detail");}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,marginBottom:5,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                    {b.title}{b.verified&&<Badge label="Verifiziert" color="green"/>}{b.duplicate&&<Badge label="Duplikat?" color="yellow"/>}
-                  </div>
-                  <div style={{fontSize:11,color:C.muted,display:"flex",gap:10,flexWrap:"wrap"}}>
-                    <span>{b.beleg_nr}</span><span>{fmtDate(b.date)}</span><span style={{fontSize:10,color:"#bbb"}}>Eingereicht {fmtDT(b.submitted_at)}</span>
-                  </div>
-                </div>
-                <div style={{fontSize:14,fontWeight:500,marginLeft:10,whiteSpace:"nowrap"}}>{fmtAmt(b.amount,b.currency)}</div>
-              </div>
+      <input placeholder="Suchen…" value="${s.search}" oninput="setState({search:this.value})" style="${inp("margin-bottom:14px;")}"/>
+      ${filtered.length===0?`<div style="text-align:center;color:#ccc;font-size:13px;margin-top:50px;">${s.belege.length===0?"Noch keine Belege — erstelle deinen ersten!":"Keine Treffer."}</div>`:""}
+      ${filtered.map(b=>`
+      <div class="hcard" style="background:#fff;border:1px solid ${C.border};border-radius:10px;padding:13px 16px;cursor:pointer;margin-bottom:8px;transition:border-color .15s;" onclick="setState({selected:${JSON.stringify(b).replace(/'/g,"&#39;")},screen:'user_detail'})">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              ${b.title} ${b.verified?badge("Verifiziert","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}
             </div>
-          ))}
-        </div>
-      )}
-
-      {view==="add"&&(
-        <div style={{maxWidth:500,margin:"0 auto",padding:"26px 16px"}}>
-          <div style={{fontFamily:F.serif,fontSize:20,fontWeight:900,marginBottom:22}}>Neuer Beleg</div>
-          <div style={{marginBottom:14}}><label style={lbl}>TITEL *</label><input style={inp} value={title} onChange={e=>setTitle(e.target.value)} placeholder="z.B. Rewe Einkauf"/></div>
-          <div style={{display:"flex",gap:10,marginBottom:14}}>
-            <div style={{flex:1}}><label style={lbl}>BETRAG</label><input style={inp} type="number" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00"/></div>
-            <div style={{width:90}}><label style={lbl}>WÄHRUNG</label><select style={{...inp,background:"#fff"}} value={currency} onChange={e=>setCurrency(e.target.value)}><option>CHF</option><option>EUR</option></select></div>
-          </div>
-          <div style={{marginBottom:14}}><label style={lbl}>DATUM</label><input style={inp} type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-          <div style={{marginBottom:14}}><label style={lbl}>NOTIZ</label><textarea style={{...inp,height:68,resize:"vertical"}} value={note} onChange={e=>setNote(e.target.value)} placeholder="Optional…"/></div>
-          <div style={{marginBottom:22}}>
-            <label style={lbl}>DATEI (FOTO / PDF / HTML)</label>
-            <div onClick={()=>fileRef.current.click()} style={{border:`1px dashed ${C.border}`,borderRadius:6,padding:"18px",textAlign:"center",cursor:"pointer",color:"#ccc",fontSize:12,background:"#fff"}} onMouseEnter={e=>e.currentTarget.style.borderColor="#000"} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-              {file?<span style={{color:"#000"}}>📎 {file.name}</span>:"Foto, PDF oder HTML-Beleg auswählen"}
+            <div style="font-size:11px;color:${C.muted};display:flex;gap:10px;flex-wrap:wrap;">
+              <span>${b.beleg_nr}</span><span>${fmtDate(b.date)}</span><span style="font-size:10px;color:#bbb;">Eingereicht ${fmtDT(b.submitted_at)}</span>
             </div>
-            <input ref={fileRef} type="file" accept="image/*,application/pdf,text/html,.html" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f)return;if(f.size>4000000){setToast("Datei max. 4 MB.");return;}setFile(f);setFileSrc(await fileToB64(f));}}/>
-            {fileSrc&&<FilePreview src={fileSrc} name={file?.name}/>}
           </div>
-          <button onClick={addBeleg} disabled={saving} style={{...B("primary"),width:"100%",padding:"12px 0",fontSize:12,letterSpacing:1,opacity:saving?.5:1}}>{saving?"Speichert…":"BELEG EINREICHEN"}</button>
+          <div style="font-size:14px;font-weight:500;margin-left:10px;white-space:nowrap;">${fmtAmt(b.amount,b.currency)}</div>
         </div>
-      )}
-
-      {view==="detail"&&selected&&(
-        <div style={{maxWidth:500,margin:"0 auto",padding:"26px 16px"}}>
-          <div style={{fontFamily:F.serif,fontSize:21,fontWeight:900,marginBottom:4}}>{selected.title}</div>
-          <div style={{fontSize:11,color:C.muted,marginBottom:18,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-            <span>{selected.beleg_nr}</span><span>{fmtDate(selected.date)}</span>
-            {selected.verified&&<Badge label="Verifiziert" color="green"/>}{selected.duplicate&&<Badge label="Duplikat?" color="yellow"/>}
-          </div>
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"16px",marginBottom:18}}>
-            {[{label:"BELEGNUMMER",val:selected.beleg_nr},{label:"BETRAG",val:fmtAmt(selected.amount,selected.currency)},{label:"DATUM",val:fmtDate(selected.date)},{label:"EINGEREICHT AM",val:fmtDT(selected.submitted_at)},...(selected.note?[{label:"NOTIZ",val:selected.note}]:[])].map(r=>(
-              <div key={r.label} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
-                <span style={{fontSize:10,color:C.muted,letterSpacing:1.2}}>{r.label}</span><span style={{fontSize:13}}>{r.val}</span>
-              </div>
-            ))}
-          </div>
-          {selected.file_src&&<div style={{marginBottom:18}}><label style={lbl}>ANHANG</label><FilePreview src={selected.file_src} name={selected.file_name}/></div>}
-        </div>
-      )}
-      {toast&&<Toast msg={toast} onDone={()=>setToast("")}/>}
+      </div>`).join("")}
     </div>
-  );
+    ${renderToast()}
+  </div>`;
 }
 
-// ── ADMIN APP ───────────────────────────────────────────────────────────────
-function AdminApp({admin,onLogout}){
-  const[belege,setBelege]=useState([]);const[users,setUsers]=useState([]);const[tab,setTab]=useState("belege");
-  const[search,setSearch]=useState("");const[filterStatus,setFilterStatus]=useState("Alle");const[selected,setSelected]=useState(null);
-  const[toast,setToast]=useState("");const[loading,setLoading]=useState(true);
+// ── User add ──────────────────────────────────────────────────────────────
+function renderUserAdd() {
+const s = state;
+return `
 
-  async function refresh(){setLoading(true);const[b,u]=await Promise.all([getBelege(),getUsers()]);setBelege(b);setUsers(u);setLoading(false);if(selected)setSelected(b.find(x=>x.id===selected.id)||null);}
-  useEffect(()=>{refresh();},[]);
-
-  async function toggleVerify(id){const b=belege.find(x=>x.id===id);if(!b)return;const u={...b,verified:!b.verified};await updateBeleg(id,{verified:u.verified});setBelege(belege.map(x=>x.id===id?u:x));setSelected(u);setToast(u.verified?"Beleg verifiziert ✓":"Verifizierung aufgehoben");}
-  async function toggleDup(id){const b=belege.find(x=>x.id===id);if(!b)return;const u={...b,duplicate:!b.duplicate};await updateBeleg(id,{duplicate:u.duplicate});setBelege(belege.map(x=>x.id===id?u:x));setSelected(u);setToast("Duplikat-Status aktualisiert");}
-  async function handleDelBeleg(id){await delBeleg(id);setBelege(belege.filter(x=>x.id!==id));setSelected(null);setToast("Beleg gelöscht.");}
-  async function handleDelUser(id){await delUser(id);setUsers(users.filter(u=>u.id!==id));setBelege(belege.filter(b=>b.user_id!==id));setToast("Konto gelöscht.");}
-
-  const filtered=belege.filter(b=>{const q=search.toLowerCase();const mQ=!q||b.title.toLowerCase().includes(q)||b.beleg_nr.toLowerCase().includes(q)||b.user_name.toLowerCase().includes(q);const mS=filterStatus==="Alle"||(filterStatus==="Verifiziert"&&b.verified)||(filterStatus==="Ungeprüft"&&!b.verified)||(filterStatus==="Duplikat"&&b.duplicate);return mQ&&mS;}).sort((a,b)=>new Date(b.submitted_at)-new Date(a.submitted_at));
-  const stats=[{label:"BELEGE GESAMT",val:belege.length},{label:"UNGEPRÜFT",val:belege.filter(b=>!b.verified).length,warn:belege.filter(b=>!b.verified).length>0},{label:"DUPLIKATE",val:belege.filter(b=>b.duplicate).length,warn:belege.filter(b=>b.duplicate).length>0},{label:"TOTAL CHF",val:"CHF "+belege.filter(b=>b.currency==="CHF").reduce((s,b)=>s+(parseFloat(b.amount)||0),0).toFixed(2)},{label:"TOTAL EUR",val:"EUR "+belege.filter(b=>b.currency==="EUR").reduce((s,b)=>s+(parseFloat(b.amount)||0),0).toFixed(2)}];
-
-  if(loading)return <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontSize:12,color:C.muted}}>Laden…</div>;
-
-  return(
-    <div style={{minHeight:"100vh",background:"#f0f0f0"}}>
-      <div style={{background:"#000",padding:"13px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{fontFamily:F.serif,fontSize:16,fontWeight:900,color:"#fff"}}>🔐 Admin — {admin.name}</div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={refresh} style={{...B("ghost"),fontSize:11,padding:"6px 12px"}}>↻</button>
-          <button onClick={onLogout} style={{...B("ghost"),fontSize:11,padding:"6px 12px"}}>ABMELDEN</button>
-        </div>
+  <div style="min-height:100vh;background:${C.bg};">
+    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">🧾 Belege</div>
+      <div style="display:flex;gap:10px;">
+        <span style="font-size:11px;color:${C.muted};">👤 ${s.user.displayName}</span>
+        <button style="${btnStyle("ghost")}" onclick="setState({screen:'user_list',title:'',amount:'',note:'',file:null,fileSrc:null})">← ZURÜCK</button>
       </div>
-      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px",display:"flex"}}>
-        {["belege","users"].map(t=>(
-          <button key={t} onClick={()=>{setTab(t);setSelected(null);}} style={{padding:"12px 20px",background:"transparent",border:"none",borderBottom:tab===t?"2px solid #000":"2px solid transparent",cursor:"pointer",fontSize:11,letterSpacing:1,fontFamily:F.mono,color:tab===t?"#000":"#999",fontWeight:tab===t?500:400}}>
-            {t==="belege"?"BELEGE":"NUTZERKONTEN"}
-          </button>
-        ))}
-      </div>
-      <div style={{maxWidth:900,margin:"0 auto",padding:"18px 16px 0"}}>
-        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:18}}>
-          {stats.map(c=>(
-            <div key={c.label} style={{flex:"1 1 110px",background:C.surface,border:`1px solid ${c.warn?"#f5dba0":C.border}`,borderRadius:8,padding:"11px 14px"}}>
-              <div style={{fontSize:9,color:c.warn?C.warn:C.muted,letterSpacing:1.5,marginBottom:3}}>{c.label}</div>
-              <div style={{fontSize:15,fontWeight:500,color:c.warn?C.warn:"#000"}}>{c.val}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {tab==="belege"&&(
-        <div style={{maxWidth:900,margin:"0 auto",padding:"0 16px 30px",display:"flex",gap:14}}>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{display:"flex",gap:8,marginBottom:12}}>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Suchen…" style={{...inp,flex:1}}/>
-              <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...inp,width:"auto",background:"#fff"}}>
-                {["Alle","Ungeprüft","Verifiziert","Duplikat"].map(s=><option key={s}>{s}</option>)}
-              </select>
-            </div>
-            {filtered.map(b=>(
-              <div key={b.id} className="hcard" onClick={()=>setSelected(b)} style={{background:C.surface,border:`1px solid ${selected?.id===b.id?"#000":C.border}`,borderRadius:9,padding:"11px 14px",cursor:"pointer",marginBottom:7,transition:"border-color .15s"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,marginBottom:4,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                      {b.title}{b.verified&&<Badge label="✓" color="green"/>}{b.duplicate&&<Badge label="Duplikat?" color="yellow"/>}
-                    </div>
-                    <div style={{fontSize:10,color:C.muted,display:"flex",gap:8,flexWrap:"wrap"}}>
-                      <span>{b.beleg_nr}</span><span>{b.user_name}</span><span>{fmtDT(b.submitted_at)}</span>
-                    </div>
-                  </div>
-                  <div style={{fontSize:13,fontWeight:500,marginLeft:8,whiteSpace:"nowrap"}}>{fmtAmt(b.amount,b.currency)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          {selected&&(
-            <div style={{width:270,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"16px",height:"fit-content",position:"sticky",top:16}}>
-              <div style={{fontFamily:F.serif,fontSize:15,fontWeight:900,marginBottom:3}}>{selected.title}</div>
-              <div style={{fontSize:11,color:C.muted,marginBottom:12}}>{selected.beleg_nr} · {selected.user_name}</div>
-              {[{label:"BETRAG",val:fmtAmt(selected.amount,selected.currency)},{label:"DATUM",val:fmtDate(selected.date)},{label:"EINGEREICHT",val:fmtDT(selected.submitted_at)},...(selected.note?[{label:"NOTIZ",val:selected.note}]:[])].map(r=>(
-                <div key={r.label} style={{padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
-                  <div style={{fontSize:9,color:C.muted,letterSpacing:1.2,marginBottom:2}}>{r.label}</div>
-                  <div style={{fontSize:12}}>{r.val}</div>
-                </div>
-              ))}
-              {selected.file_src&&<div style={{marginTop:10}}><div style={{fontSize:9,color:C.muted,letterSpacing:1.2,marginBottom:6}}>ANHANG</div><FilePreview src={selected.file_src} name={selected.file_name}/></div>}
-              <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:7}}>
-                <button onClick={()=>toggleVerify(selected.id)} style={{...B(selected.verified?"warn":"ok"),width:"100%",textAlign:"center"}}>{selected.verified?"Verifizierung aufheben":"✓ Als verifiziert markieren"}</button>
-                <button onClick={()=>toggleDup(selected.id)} style={{...B("warn"),width:"100%",textAlign:"center"}}>{selected.duplicate?"Duplikat entfernen":"⚠ Als Duplikat markieren"}</button>
-                <button onClick={()=>{if(window.confirm("Beleg wirklich löschen?"))handleDelBeleg(selected.id);}} style={{...B("danger"),width:"100%",textAlign:"center"}}>🗑 Löschen</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab==="users"&&(
-        <div style={{maxWidth:620,margin:"0 auto",padding:"0 16px 30px"}}>
-          {users.map(u=>{const uB=belege.filter(b=>b.user_id===u.id);return(
-            <div key={u.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 16px",marginBottom:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <div style={{fontSize:13,marginBottom:3}}>{u.display_name}</div>
-                  <div style={{fontSize:10,color:C.muted,display:"flex",gap:10,flexWrap:"wrap"}}>
-                    <span>Geb. {fmtDate(u.bday)}</span><span>{uB.length} Belege</span>
-                    <span>CHF {uB.filter(b=>b.currency==="CHF").reduce((s,b)=>s+(parseFloat(b.amount)||0),0).toFixed(2)}</span>
-                    <span>EUR {uB.filter(b=>b.currency==="EUR").reduce((s,b)=>s+(parseFloat(b.amount)||0),0).toFixed(2)}</span>
-                  </div>
-                </div>
-                <button onClick={()=>{if(window.confirm(`Konto von ${u.display_name} löschen?`))handleDelUser(u.id);}} style={{...B("danger"),fontSize:11,padding:"6px 12px"}}>Löschen</button>
-              </div>
-            </div>
-          );})}
-        </div>
-      )}
-      {toast&&<Toast msg={toast} onDone={()=>setToast("")}/>}
     </div>
-  );
+    <div style="max-width:500px;margin:0 auto;padding:26px 16px;" class="anim">
+      <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:900;margin-bottom:22px;">Neuer Beleg</div>
+      <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">TITEL *</label>
+        <input style="${inp()}" value="${s.title}" oninput="setState({title:this.value})" placeholder="z.B. Rewe Einkauf"/></div>
+      <div style="display:flex;gap:10px;margin-bottom:14px;">
+        <div style="flex:1;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">BETRAG</label>
+          <input type="number" step="0.01" style="${inp()}" value="${s.amount}" oninput="setState({amount:this.value})" placeholder="0.00"/></div>
+        <div style="width:90px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">WÄHRUNG</label>
+          <select style="${inp()}" onchange="setState({currency:this.value})"><option ${s.currency==="CHF"?"selected":""}>CHF</option><option ${s.currency==="EUR"?"selected":""}>EUR</option></select></div>
+      </div>
+      <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">DATUM</label>
+        <input type="date" style="${inp()}" value="${s.date}" oninput="setState({date:this.value})"/></div>
+      <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">NOTIZ</label>
+        <textarea style="${inp("height:68px;resize:vertical;")}" oninput="setState({note:this.value})" placeholder="Optional…">${s.note}</textarea></div>
+      <div style="margin-bottom:22px;">
+        <label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">DATEI (FOTO / PDF / HTML)</label>
+        <div style="border:1px dashed ${C.border};border-radius:6px;padding:18px;text-align:center;cursor:pointer;color:#ccc;font-size:12px;background:#fff;"
+          onmouseenter="this.style.borderColor='#000'" onmouseleave="this.style.borderColor='${C.border}'"
+          onclick="document.getElementById('fileInput').click()">
+          ${s.file?`<span style="color:#000;">📎 ${s.file.name}</span>`:"Foto, PDF oder HTML-Beleg auswählen"}
+        </div>
+        <input id="fileInput" type="file" accept="image/*,application/pdf,text/html,.html" style="display:none;" onchange="handleFileChange(event)"/>
+        ${s.fileSrc?renderFilePreview(s.fileSrc,s.file?.name):""}
+      </div>
+      <button style="${btnStyle("primary")}width:100%;padding:12px 0;font-size:12px;letter-spacing:1px;opacity:${s.saving?.5:1};" onclick="addBeleg()">${s.saving?"Speichert…":"BELEG EINREICHEN"}</button>
+    </div>
+    ${renderToast()}
+  </div>`;
 }
 
-function App(){
-  const[user,setUser]=useState(null);const[admin,setAdmin]=useState(null);
-  if(admin)return <AdminApp admin={admin} onLogout={()=>setAdmin(null)}/>;
-  if(user) return <UserApp  user={user}  onLogout={()=>setUser(null)}/>;
-  return <AuthScreen onLogin={setUser} onAdminLogin={setAdmin}/>;
+// ── User detail ───────────────────────────────────────────────────────────
+function renderUserDetail() {
+const b = state.selected; if(!b) return “”;
+return `
+
+  <div style="min-height:100vh;background:${C.bg};">
+    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">🧾 Belege</div>
+      <button style="${btnStyle("ghost")}" onclick="setState({screen:'user_list'})">← ZURÜCK</button>
+    </div>
+    <div style="max-width:500px;margin:0 auto;padding:26px 16px;" class="anim">
+      <div style="font-family:'Playfair Display',serif;font-size:21px;font-weight:900;margin-bottom:4px;">${b.title}</div>
+      <div style="font-size:11px;color:${C.muted};margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <span>${b.beleg_nr}</span><span>${fmtDate(b.date)}</span>
+        ${b.verified?badge("Verifiziert","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}
+      </div>
+      <div style="background:#fff;border:1px solid ${C.border};border-radius:10px;padding:16px;margin-bottom:18px;">
+        ${[["BELEGNUMMER",b.beleg_nr],["BETRAG",fmtAmt(b.amount,b.currency)],["DATUM",fmtDate(b.date)],["EINGEREICHT AM",fmtDT(b.submitted_at)],...(b.note?[["NOTIZ",b.note]]:[])].map(([l,v])=>`
+        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid ${C.border};">
+          <span style="font-size:10px;color:${C.muted};letter-spacing:1.2px;">${l}</span>
+          <span style="font-size:13px;">${v}</span>
+        </div>`).join("")}
+      </div>
+      ${b.file_src?`<div style="margin-bottom:18px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">ANHANG</label>${renderFilePreview(b.file_src,b.file_name)}</div>`:""}
+    </div>
+  </div>`;
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+// ── Admin ─────────────────────────────────────────────────────────────────
+function renderAdmin() {
+const s = state;
+if(s.loadingData) return `<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-size:12px;color:${C.muted};">Laden…</div>`;
+
+const filtered = s.belege.filter(b=>{
+const q=s.search.toLowerCase();
+const mQ=!q||b.title.toLowerCase().includes(q)||b.beleg_nr.toLowerCase().includes(q)||b.user_name.toLowerCase().includes(q);
+const mS=s.filterStatus===“Alle”||(s.filterStatus===“Verifiziert”&&b.verified)||(s.filterStatus===“Ungeprüft”&&!b.verified)||(s.filterStatus===“Duplikat”&&b.duplicate);
+return mQ&&mS;
+}).sort((a,b)=>new Date(b.submitted_at)-new Date(a.submitted_at));
+
+const stats = [
+[“BELEGE GESAMT”,s.belege.length,false],
+[“UNGEPRÜFT”,s.belege.filter(b=>!b.verified).length,s.belege.filter(b=>!b.verified).length>0],
+[“DUPLIKATE”,s.belege.filter(b=>b.duplicate).length,s.belege.filter(b=>b.duplicate).length>0],
+[“TOTAL CHF”,“CHF “+s.belege.filter(b=>b.currency===“CHF”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2),false],
+[“TOTAL EUR”,“EUR “+s.belege.filter(b=>b.currency===“EUR”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2),false],
+];
+
+const sel = s.selected;
+
+return `
+
+  <div style="min-height:100vh;background:#f0f0f0;">
+    <div style="background:#000;padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-family:'Playfair Display',serif;font-size:16px;font-weight:900;color:#fff;">🔐 Admin — ${s.admin.name}</div>
+      <div style="display:flex;gap:8px;">
+        <button style="${btnStyle("ghost")}font-size:11px;padding:6px 12px;" onclick="loadAdminData()">↻</button>
+        <button style="${btnStyle("ghost")}font-size:11px;padding:6px 12px;" onclick="setState({admin:null,screen:'auth',belege:[],users:[]})">ABMELDEN</button>
+      </div>
+    </div>
+    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:0 20px;display:flex;">
+      <button onclick="setState({screen:'admin_belege',selected:null})" style="padding:12px 20px;background:transparent;border:none;border-bottom:${s.screen==="admin_belege"?"2px solid #000":"2px solid transparent"};font-size:11px;letter-spacing:1px;color:${s.screen==="admin_belege"?"#000":"#999"};font-weight:${s.screen==="admin_belege"?500:400};">BELEGE</button>
+      <button onclick="setState({screen:'admin_users',selected:null})" style="padding:12px 20px;background:transparent;border:none;border-bottom:${s.screen==="admin_users"?"2px solid #000":"2px solid transparent"};font-size:11px;letter-spacing:1px;color:${s.screen==="admin_users"?"#000":"#999"};font-weight:${s.screen==="admin_users"?500:400};">NUTZERKONTEN</button>
+    </div>
+    <div style="max-width:900px;margin:0 auto;padding:18px 16px 0;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
+        ${stats.map(([l,v,w])=>`
+        <div style="flex:1 1 110px;background:#fff;border:1px solid ${w?"#f5dba0":C.border};border-radius:8px;padding:11px 14px;">
+          <div style="font-size:9px;color:${w?"#b86800":C.muted};letter-spacing:1.5px;margin-bottom:3px;">${l}</div>
+          <div style="font-size:15px;font-weight:500;color:${w?"#b86800":"#000"};">${v}</div>
+        </div>`).join("")}
+      </div>
+    </div>
+
+```
+${s.screen==="admin_belege"?`
+<div style="max-width:900px;margin:0 auto;padding:0 16px 30px;display:flex;gap:14px;">
+  <div style="flex:1;min-width:0;">
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <input value="${s.search}" oninput="setState({search:this.value})" placeholder="Suchen…" style="${inp("flex:1;")}"/>
+      <select onchange="setState({filterStatus:this.value})" style="${inp("width:auto;background:#fff;")}">
+        ${["Alle","Ungeprüft","Verifiziert","Duplikat"].map(x=>`<option ${s.filterStatus===x?"selected":""}>${x}</option>`).join("")}
+      </select>
+    </div>
+    ${filtered.map(b=>`
+    <div class="hcard" onclick="setState({selected:${JSON.stringify(b).replace(/"/g,'&quot;')}})" style="background:#fff;border:1px solid ${sel?.id===b.id?"#000":C.border};border-radius:9px;padding:11px 14px;cursor:pointer;margin-bottom:7px;transition:border-color .15s;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;margin-bottom:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            ${b.title} ${b.verified?badge("✓","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}
+          </div>
+          <div style="font-size:10px;color:${C.muted};display:flex;gap:8px;flex-wrap:wrap;">
+            <span>${b.beleg_nr}</span><span>${b.user_name}</span><span>${fmtDT(b.submitted_at)}</span>
+          </div>
+        </div>
+        <div style="font-size:13px;font-weight:500;margin-left:8px;white-space:nowrap;">${fmtAmt(b.amount,b.currency)}</div>
+      </div>
+    </div>`).join("")}
+  </div>
+  ${sel?`
+  <div style="width:270px;background:#fff;border:1px solid ${C.border};border-radius:10px;padding:16px;height:fit-content;position:sticky;top:16px;">
+    <div style="font-family:'Playfair Display',serif;font-size:15px;font-weight:900;margin-bottom:3px;">${sel.title}</div>
+    <div style="font-size:11px;color:${C.muted};margin-bottom:12px;">${sel.beleg_nr} · ${sel.user_name}</div>
+    ${[["BETRAG",fmtAmt(sel.amount,sel.currency)],["DATUM",fmtDate(sel.date)],["EINGEREICHT",fmtDT(sel.submitted_at)],...(sel.note?[["NOTIZ",sel.note]]:[])].map(([l,v])=>`
+    <div style="padding:5px 0;border-bottom:1px solid ${C.border};">
+      <div style="font-size:9px;color:${C.muted};letter-spacing:1.2px;margin-bottom:2px;">${l}</div>
+      <div style="font-size:12px;">${v}</div>
+    </div>`).join("")}
+    ${sel.file_src?`<div style="margin-top:10px;"><div style="font-size:9px;color:${C.muted};letter-spacing:1.2px;margin-bottom:6px;">ANHANG</div>${renderFilePreview(sel.file_src,sel.file_name)}</div>`:""}
+    <div style="margin-top:14px;display:flex;flex-direction:column;gap:7px;">
+      <button style="${btnStyle(sel.verified?"warn":"ok")}width:100%;text-align:center;" onclick="toggleVerify('${sel.id}')">${sel.verified?"Verifizierung aufheben":"✓ Als verifiziert markieren"}</button>
+      <button style="${btnStyle("warn")}width:100%;text-align:center;" onclick="toggleDup('${sel.id}')">${sel.duplicate?"Duplikat entfernen":"⚠ Als Duplikat markieren"}</button>
+      <button style="${btnStyle("danger")}width:100%;text-align:center;" onclick="handleDelBeleg('${sel.id}')">🗑 Löschen</button>
+    </div>
+  </div>`:""
+}
+</div>`:""
+}
+
+${s.screen==="admin_users"?`
+<div style="max-width:620px;margin:0 auto;padding:0 16px 30px;">
+  ${s.users.map(u=>{
+    const uB=s.belege.filter(b=>b.user_id===u.id);
+    return `<div style="background:#fff;border:1px solid ${C.border};border-radius:9px;padding:13px 16px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:13px;margin-bottom:3px;">${u.display_name}</div>
+          <div style="font-size:10px;color:${C.muted};display:flex;gap:10px;flex-wrap:wrap;">
+            <span>Geb. ${fmtDate(u.bday)}</span><span>${uB.length} Belege</span>
+            <span>CHF ${uB.filter(b=>b.currency==="CHF").reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2)}</span>
+            <span>EUR ${uB.filter(b=>b.currency==="EUR").reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2)}</span>
+          </div>
+        </div>
+        <button style="${btnStyle("danger")}font-size:11px;padding:6px 12px;" onclick="handleDelUser('${u.id}','${u.display_name}')">Löschen</button>
+      </div>
+    </div>`;
+  }).join("")}
+</div>`:""
+}
+${renderToast()}
 ```
 
-  </script>
+  </div>`;
+}
+
+function renderFilePreview(src, name) {
+if(!src) return “”;
+if(src.startsWith(“data:application/pdf”)) return `<a href="${src}" download="${name||'beleg.pdf'}" style="color:#000;font-size:12px;text-decoration:underline;">📄 PDF herunterladen</a>`;
+if(src.startsWith(“data:text/html”)||(name||””).endsWith(”.html”)) {
+let h=””; try{h=atob(src.split(”,”)[1]);}catch{}
+return `<iframe srcdoc="${h.replace(/"/g,'&quot;')}" style="width:100%;height:300px;border:1px solid ${C.border};border-radius:6px;margin-top:8px;" sandbox="allow-same-origin"></iframe>`;
+}
+return `<img src="${src}" style="max-width:100%;max-height:200px;border-radius:4px;margin-top:8px;border:1px solid ${C.border};object-fit:contain;"/>`;
+}
+
+function renderToast() {
+if(!state.toast) return “”;
+return `<div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:10px 22px;border-radius:99px;font-size:12px;z-index:999;box-shadow:0 4px 20px #0002;white-space:nowrap;">${state.toast}</div>`;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+render();
+</script>
+
 </body>
 </html>
