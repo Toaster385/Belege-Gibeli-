@@ -5,7 +5,6 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Belegverwaltung</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet"/>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
@@ -14,57 +13,69 @@
     input:focus,select:focus,textarea:focus{border-color:#000!important;}
     .hcard:hover{border-color:#000!important;}
     @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#ddd;border-radius:99px}
     .anim{animation:fadein .3s ease;}
     button{cursor:pointer;font-family:'DM Mono',monospace;}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#ddd;border-radius:99px}
   </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="app"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-size:12px;color:#999;">Laden…</div></div>
 <script>
-const SUPABASE_URL = "https://ircbccxymbujiititlki.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlyY2JjY3h5bWJ1amlpdGl0bGtpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4OTI2NDEsImV4cCI6MjA5MDQ2ODY0MX0.KTX35NCGDF1zJoojSruLG8SmF0TUShg26tl3S3MYc20";
+// ── KONFIGURATION ─────────────────────────────────────────────────────────
+const GH_TOKEN = "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";
+const GH_OWNER = "Toaster385";
+const GH_REPO  = "Belege-Gibeli-";
+const GH_FILE  = "data.json";
 
-// ── ADMIN ZUGANGSDATEN — hier ändern! ─────────────────────────────────────
 const ADMINS = [
 { name: “Admin1”, password: “passwort1” },
 { name: “Admin2”, password: “passwort2” },
 { name: “Admin3”, password: “passwort3” },
 ];
 
+// ── GitHub API ────────────────────────────────────────────────────────────
+let fileSha = null;
+
+async function ghGet() {
+const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`, {
+headers: { “Authorization”: `token ${GH_TOKEN}`, “Accept”: “application/vnd.github.v3+json” }
+});
+if (res.status === 404) return { users: {}, belege: [] };
+if (!res.ok) throw new Error(“GitHub Lesefehler: “ + res.status);
+const json = await res.json();
+fileSha = json.sha;
+return JSON.parse(atob(json.content.replace(/\n/g,””)));
+}
+
+async function ghSave(db) {
+const content = btoa(unescape(encodeURIComponent(JSON.stringify(db, null, 2))));
+const body = { message: “Update data”, content, …(fileSha ? { sha: fileSha } : {}) };
+const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`, {
+method: “PUT”,
+headers: { “Authorization”: `token ${GH_TOKEN}`, “Accept”: “application/vnd.github.v3+json”, “Content-Type”: “application/json” },
+body: JSON.stringify(body)
+});
+if (!res.ok) throw new Error(“GitHub Schreibfehler: “ + res.status);
+const json = await res.json();
+fileSha = json.content.sha;
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
+let DB = { users: {}, belege: [] };
 let state = {
 user: null, admin: null,
-screen: “auth”, // auth | user_list | user_add | user_detail | admin_belege | admin_users
-belege: [], users: [],
+screen: “auth”,
 selected: null, search: “”, filterStatus: “Alle”,
 authMode: “login”, authName: “”, authBday: “”, authErr: “”, authLoading: false,
 aname: “”, apw: “”,
-title: “”, amount: “”, currency: “CHF”, date: new Date().toISOString().slice(0,10), note: “”,
-file: null, fileSrc: null,
-toast: “”, saving: false, loadingData: false,
-tab: “belege”
+title: “”, amount: “”, currency: “CHF”,
+date: new Date().toISOString().slice(0,10),
+note: “”, file: null, fileSrc: null,
+toast: “”, saving: false, loadingData: false, tab: “belege”
 };
 
 function setState(patch) { Object.assign(state, patch); render(); }
-
-// ── Supabase ──────────────────────────────────────────────────────────────
-async function sb(method, table, body, query=””) {
-const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}`, {
-method,
-headers: {“apikey”:SUPABASE_KEY,“Authorization”:`Bearer ${SUPABASE_KEY}`,“Content-Type”:“application/json”,“Prefer”:“return=representation”},
-body: body ? JSON.stringify(body) : undefined
-});
-if (!res.ok) throw new Error(await res.text());
-const t = await res.text(); return t ? JSON.parse(t) : [];
-}
-const getUsers    = () => sb(“GET”,“users”,null,”?select=*”);
-const getBelege   = () => sb(“GET”,“belege”,null,”?select=*&order=submitted_at.desc”);
-const insertUser  = u => sb(“POST”,“users”,u);
-const insertBeleg = b => sb(“POST”,“belege”,b);
-const updateBeleg = (id,d) => sb(“PATCH”,“belege”,d,`?id=eq.${id}`);
-const delBeleg    = id => sb(“DELETE”,“belege”,null,`?id=eq.${id}`);
-const delUser     = async id => { await sb(“DELETE”,“belege”,null,`?user_id=eq.${id}`); await sb(“DELETE”,“users”,null,`?id=eq.${id}`); };
+function showToast(msg) { setState({toast:msg}); setTimeout(()=>setState({toast:””}),2500); }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
@@ -76,426 +87,236 @@ function fmtAmt(n,c) { if(n===””||n==null)return”—”; return (c||“CHF
 function isDup(list,b) { return list.some(e=>e.amount===b.amount&&e.currency===b.currency&&e.date===b.date&&e.title.toLowerCase()===b.title.toLowerCase()); }
 function fileToB64(f) { return new Promise((r,j)=>{const x=new FileReader();x.onload=()=>r(x.result);x.onerror=j;x.readAsDataURL(f);}); }
 
-function showToast(msg) {
-setState({toast:msg});
-setTimeout(()=>setState({toast:””}), 2500);
-}
-
-// ── CSS helpers ───────────────────────────────────────────────────────────
+// ── Design ────────────────────────────────────────────────────────────────
 const C = {bg:”#f4f4f4”,surface:”#fff”,border:”#e0e0e0”,muted:”#999”,danger:”#c00”,warn:”#b86800”,ok:”#1a7a3a”};
-function inp(extra=””) { return `width:100%;background:#fff;border:1px solid ${C.border};border-radius:6px;padding:9px 12px;color:#000;font-size:13px;font-family:'DM Mono',monospace;${extra}`; }
-function btnStyle(v) {
-const base = “font-family:‘DM Mono’,monospace;font-size:11px;letter-spacing:.8px;border-radius:6px;padding:8px 16px;font-weight:500;”;
-if(v===“primary”) return base+“background:#000;color:#fff;border:none;”;
-if(v===“ghost”)   return base+`background:#fff;color:#666;border:1px solid ${C.border};`;
-if(v===“danger”)  return base+“background:#fff;color:#c00;border:1px solid #fcc;”;
-if(v===“warn”)    return base+“background:#fff;color:#b86800;border:1px solid #f5dba0;”;
-if(v===“ok”)      return base+“background:#fff;color:#1a7a3a;border:1px solid #a0d4b0;”;
-return base;
-}
-function badge(label, color) {
-const m = {green:“background:#e6f4ec;color:#1a7a3a;border-color:#a0d4b0;”,yellow:“background:#fdf6e3;color:#b86800;border-color:#f5dba0;”,gray:“background:#f0f0f0;color:#888;border-color:#ddd;”};
-return `<span style="font-size:10px;padding:2px 9px;border-radius:99px;border:1px solid;${m[color]||m.gray}font-family:'DM Mono',monospace;letter-spacing:.5px;white-space:nowrap;">${label}</span>`;
-}
+function inp(extra=””){return `width:100%;background:#fff;border:1px solid ${C.border};border-radius:6px;padding:9px 12px;color:#000;font-size:13px;font-family:'DM Mono',monospace;${extra}`;}
+function btnS(v){const b=“font-family:‘DM Mono’,monospace;font-size:11px;letter-spacing:.8px;border-radius:6px;padding:8px 16px;font-weight:500;”;
+if(v===“primary”)return b+“background:#000;color:#fff;border:none;”;
+if(v===“ghost”)return b+`background:#fff;color:#666;border:1px solid ${C.border};`;
+if(v===“danger”)return b+“background:#fff;color:#c00;border:1px solid #fcc;”;
+if(v===“warn”)return b+“background:#fff;color:#b86800;border:1px solid #f5dba0;”;
+if(v===“ok”)return b+“background:#fff;color:#1a7a3a;border:1px solid #a0d4b0;”;
+return b;}
+function badge(l,c){const m={green:“background:#e6f4ec;color:#1a7a3a;border-color:#a0d4b0;”,yellow:“background:#fdf6e3;color:#b86800;border-color:#f5dba0;”,gray:“background:#f0f0f0;color:#888;border-color:#ddd;”};
+return `<span style="font-size:10px;padding:2px 9px;border-radius:99px;border:1px solid;${m[c]||m.gray}white-space:nowrap;">${l}</span>`;}
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 async function submitUser() {
-if(!state.authName.trim()) { setState({authErr:“Bitte Name eingeben.”}); return; }
-if(!state.authBday) { setState({authErr:“Bitte Geburtsdatum eingeben.”}); return; }
-setState({authLoading:true, authErr:””});
+if(!state.authName.trim()){setState({authErr:“Bitte Name eingeben.”});return;}
+if(!state.authBday){setState({authErr:“Bitte Geburtsdatum eingeben.”});return;}
+setState({authLoading:true,authErr:””});
 try {
-const users = await getUsers();
+DB = await ghGet();
 const key = state.authName.trim().toLowerCase()+”|”+state.authBday;
-if(state.authMode===“register”) {
-if(users.some(u=>u.display_name.toLowerCase()===state.authName.trim().toLowerCase())) { setState({authErr:“Name bereits vergeben.”,authLoading:false}); return; }
-if(users.find(u=>u.id===key)) { setState({authErr:“Konto existiert bereits.”,authLoading:false}); return; }
-await insertUser({id:key,display_name:state.authName.trim(),bday:state.authBday,created_at:nowISO()});
-setState({user:{id:key,displayName:state.authName.trim(),bday:state.authBday},screen:“user_list”,authLoading:false,loadingData:true});
-loadUserBelege(key);
+if(state.authMode===“register”){
+if(Object.values(DB.users).some(u=>u.displayName.toLowerCase()===state.authName.trim().toLowerCase())){setState({authErr:“Name bereits vergeben.”,authLoading:false});return;}
+if(DB.users[key]){setState({authErr:“Konto existiert bereits.”,authLoading:false});return;}
+DB.users[key]={id:key,displayName:state.authName.trim(),bday:state.authBday,createdAt:nowISO()};
+await ghSave(DB);
+setState({user:{id:key,displayName:state.authName.trim()},screen:“user_list”,authLoading:false});
 } else {
-const u = users.find(u=>u.id===key);
-if(!u) { setState({authErr:“Kein Konto gefunden. Bitte registrieren.”,authLoading:false}); return; }
-setState({user:{id:u.id,displayName:u.display_name,bday:u.bday},screen:“user_list”,authLoading:false,loadingData:true});
-loadUserBelege(u.id);
+if(!DB.users[key]){setState({authErr:“Kein Konto gefunden. Bitte registrieren.”,authLoading:false});return;}
+setState({user:{id:key,displayName:DB.users[key].displayName},screen:“user_list”,authLoading:false});
 }
-} catch(e) { setState({authErr:“Verbindungsfehler: “+e.message,authLoading:false}); }
+} catch(e){setState({authErr:“Fehler: “+e.message,authLoading:false});}
 }
 
-function submitAdmin() {
-const a = ADMINS.find(a=>a.name.toLowerCase()===state.aname.trim().toLowerCase()&&a.password===state.apw);
-if(!a) { setState({authErr:“Ungültige Zugangsdaten.”}); return; }
+function submitAdmin(){
+const a=ADMINS.find(a=>a.name.toLowerCase()===state.aname.trim().toLowerCase()&&a.password===state.apw);
+if(!a){setState({authErr:“Ungültige Zugangsdaten.”});return;}
 setState({admin:a,screen:“admin_belege”,loadingData:true});
-loadAdminData();
+ghGet().then(db=>{DB=db;setState({loadingData:false});}).catch(e=>showToast(“Fehler: “+e.message));
 }
 
-async function loadUserBelege(uid) {
-const all = await getBelege();
-setState({belege:all.filter(b=>b.user_id===uid),loadingData:false});
-}
-
-async function loadAdminData() {
-const [b,u] = await Promise.all([getBelege(),getUsers()]);
-setState({belege:b,users:u,loadingData:false});
-}
-
-// ── Actions ───────────────────────────────────────────────────────────────
-async function addBeleg() {
-if(!state.title.trim()) { showToast(“Bitte Titel eingeben.”); return; }
+// ── Belege Actions ────────────────────────────────────────────────────────
+async function addBeleg(){
+if(!state.title.trim()){showToast(“Bitte Titel eingeben.”);return;}
 setState({saving:true});
 try {
-const all = await getBelege();
-let src = null;
-if(state.file) { try { src = await fileToB64(state.file); } catch{} }
-const b = {id:uid(),beleg_nr:belegNr(all.length),user_id:state.user.id,user_name:state.user.displayName,
+DB = await ghGet();
+let src=null;
+if(state.file){try{src=await fileToB64(state.file);}catch{}}
+const myBelege=DB.belege.filter(x=>x.userId===state.user.id);
+const b={id:uid(),belegNr:belegNr(DB.belege.length),userId:state.user.id,userName:state.user.displayName,
 title:state.title.trim(),amount:state.amount.toString(),currency:state.currency,date:state.date,
-note:state.note,file_src:src,file_name:state.file?.name||null,submitted_at:nowISO(),verified:false,
-duplicate:isDup(all.filter(x=>x.user_id===state.user.id),{title:state.title.trim(),amount:state.amount.toString(),currency:state.currency,date:state.date})};
-await insertBeleg(b);
-setState({belege:[b,…state.belege],screen:“user_list”,title:””,amount:””,currency:“CHF”,
-date:new Date().toISOString().slice(0,10),note:””,file:null,fileSrc:null,saving:false});
+note:state.note,fileSrc:src,fileName:state.file?.name||null,submittedAt:nowISO(),verified:false,
+duplicate:isDup(myBelege,{title:state.title.trim(),amount:state.amount.toString(),currency:state.currency,date:state.date})};
+DB.belege.unshift(b);
+await ghSave(DB);
+setState({screen:“user_list”,title:””,amount:””,currency:“CHF”,date:new Date().toISOString().slice(0,10),note:””,file:null,fileSrc:null,saving:false});
 showToast(b.duplicate?“⚠️ Gespeichert — mögliches Duplikat!”:“Beleg gespeichert ✓”);
-} catch(e) { showToast(“Fehler: “+e.message); setState({saving:false}); }
+} catch(e){showToast(“Fehler: “+e.message);setState({saving:false});}
 }
 
-async function toggleVerify(id) {
-const b = state.belege.find(x=>x.id===id); if(!b) return;
-const updated = {…b,verified:!b.verified};
-await updateBeleg(id,{verified:updated.verified});
-setState({belege:state.belege.map(x=>x.id===id?updated:x),selected:updated});
-showToast(updated.verified?“Beleg verifiziert ✓”:“Verifizierung aufgehoben”);
+async function toggleVerify(id){
+try{
+DB=await ghGet();
+const b=DB.belege.find(x=>x.id===id);if(!b)return;
+b.verified=!b.verified;
+await ghSave(DB);
+setState({selected:{…b}});
+showToast(b.verified?“Beleg verifiziert ✓”:“Verifizierung aufgehoben”);
+}catch(e){showToast(“Fehler: “+e.message);}
 }
 
-async function toggleDup(id) {
-const b = state.belege.find(x=>x.id===id); if(!b) return;
-const updated = {…b,duplicate:!b.duplicate};
-await updateBeleg(id,{duplicate:updated.duplicate});
-setState({belege:state.belege.map(x=>x.id===id?updated:x),selected:updated});
+async function toggleDup(id){
+try{
+DB=await ghGet();
+const b=DB.belege.find(x=>x.id===id);if(!b)return;
+b.duplicate=!b.duplicate;
+await ghSave(DB);
+setState({selected:{…b}});
 showToast(“Duplikat-Status aktualisiert”);
+}catch(e){showToast(“Fehler: “+e.message);}
 }
 
-async function handleDelBeleg(id) {
-if(!confirm(“Beleg wirklich löschen?”)) return;
-await delBeleg(id);
-setState({belege:state.belege.filter(x=>x.id!==id),selected:null,screen:“admin_belege”});
+async function handleDelBeleg(id){
+if(!confirm(“Beleg wirklich löschen?”))return;
+try{
+DB=await ghGet();
+DB.belege=DB.belege.filter(x=>x.id!==id);
+await ghSave(DB);
+setState({selected:null,screen:“admin_belege”});
 showToast(“Beleg gelöscht.”);
+}catch(e){showToast(“Fehler: “+e.message);}
 }
 
-async function handleDelUser(id, name) {
-if(!confirm(`Konto von ${name} und alle Belege löschen?`)) return;
-await delUser(id);
-setState({users:state.users.filter(u=>u.id!==id),belege:state.belege.filter(b=>b.user_id!==id)});
+async function handleDelUser(id,name){
+if(!confirm(`Konto von ${name} löschen?`))return;
+try{
+DB=await ghGet();
+delete DB.users[id];
+DB.belege=DB.belege.filter(b=>b.userId!==id);
+await ghSave(DB);
+setState({});
 showToast(“Konto gelöscht.”);
+}catch(e){showToast(“Fehler: “+e.message);}
 }
 
-// ── File input ─────────────────────────────────────────────────────────────
-function handleFileChange(e) {
-const f = e.target.files[0]; if(!f) return;
-if(f.size>4000000) { showToast(“Datei max. 4 MB.”); return; }
-fileToB64(f).then(src => setState({file:f,fileSrc:src}));
+function handleFileChange(e){
+const f=e.target.files[0];if(!f)return;
+if(f.size>4000000){showToast(“Datei max. 4 MB.”);return;}
+fileToB64(f).then(src=>setState({file:f,fileSrc:src}));
 }
 
-// ── Render ────────────────────────────────────────────────────────────────
-function render() {
-const app = document.getElementById(“app”);
-const s = state;
+// ── Render helpers ────────────────────────────────────────────────────────
+function renderFilePreview(src,name){
+if(!src)return””;
+if(src.startsWith(“data:application/pdf”))return`<a href="${src}" download="${name||'beleg.pdf'}" style="color:#000;font-size:12px;text-decoration:underline;">📄 PDF herunterladen</a>`;
+if(src.startsWith(“data:text/html”)||(name||””).endsWith(”.html”)){let h=””;try{h=atob(src.split(”,”)[1]);}catch{}return`<iframe srcdoc="${h.replace(/"/g,'&quot;')}" style="width:100%;height:280px;border:1px solid ${C.border};border-radius:6px;margin-top:8px;" sandbox="allow-same-origin"></iframe>`;}
+return`<img src="${src}" style="max-width:100%;max-height:200px;border-radius:4px;margin-top:8px;border:1px solid ${C.border};object-fit:contain;"/>`;
+}
+function renderToast(){if(!state.toast)return””;return`<div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:10px 22px;border-radius:99px;font-size:12px;z-index:999;box-shadow:0 4px 20px #0002;white-space:nowrap;">${state.toast}</div>`;}
+function header(title, right){return`<div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;"><div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">${title}</div><div style="display:flex;align-items:center;gap:10px;">${right}</div></div>`;}
 
-if(s.screen === “auth”) { app.innerHTML = renderAuth(); return; }
-if(s.screen === “user_list”) { app.innerHTML = renderUserList(); return; }
-if(s.screen === “user_add”) { app.innerHTML = renderUserAdd(); return; }
-if(s.screen === “user_detail”) { app.innerHTML = renderUserDetail(); return; }
-if(s.screen === “admin_belege” || s.screen === “admin_users”) { app.innerHTML = renderAdmin(); return; }
+// ── Screens ───────────────────────────────────────────────────────────────
+function render(){
+const s=state;
+const myBelege=DB.belege.filter(b=>s.user&&b.userId===s.user.id);
+const allBelege=DB.belege;
+const allUsers=Object.values(DB.users);
+const app=document.getElementById(“app”);
+
+// AUTH
+if(s.screen===“auth”){
+const isAdmin=s.authMode===“admin”;
+app.innerHTML=` <div style="min-height:100vh;background:${C.bg};display:flex;align-items:center;justify-content:center;"> <div style="width:360px;background:#fff;border:1px solid ${C.border};border-radius:14px;padding:40px 36px;box-shadow:0 2px 24px #0000000a;"> <div style="text-align:center;margin-bottom:28px;"> <div style="font-size:28px;margin-bottom:8px;">🧾</div> <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:900;">Belegverwaltung</div> <div style="font-size:10px;color:${C.muted};margin-top:4px;letter-spacing:1.5px;">DIGITAL · SICHER · ÜBERSICHTLICH</div> </div> ${isAdmin?`
+<div style="text-align:center;margin-bottom:20px;font-size:11px;color:${C.muted};letter-spacing:1px;">ADMIN-BEREICH</div>
+<div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">ADMIN-NAME</label>
+<input style="${inp()}" value="${s.aname}" oninput="setState({aname:this.value})" onkeydown="if(event.key==='Enter')submitAdmin()"/></div>
+<div style="margin-bottom:20px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">PASSWORT</label>
+<input type="password" style="${inp()}" value="${s.apw}" oninput="setState({apw:this.value})" onkeydown="if(event.key==='Enter')submitAdmin()"/></div>
+${s.authErr?`<div style="color:${C.danger};font-size:12px;margin-bottom:10px;">${s.authErr}</div>`:””}
+<button style=”${btnS(“primary”)}width:100%;padding:11px 0;font-size:12px;” onclick=“submitAdmin()”>ALS ADMIN ANMELDEN</button>
+<div style="text-align:center;margin-top:16px;"><span style="font-size:11px;color:${C.muted};cursor:pointer;text-decoration:underline;" onclick="setState({authMode:'login',authErr:''})">← Zurück</span></div>
+`:`
+<div style="display:flex;margin-bottom:24px;border:1px solid ${C.border};border-radius:6px;overflow:hidden;">
+<button style=“flex:1;padding:9px 0;background:${s.authMode===“login”?”#000”:”#fff”};color:${s.authMode===“login”?”#fff”:”#999”};border:none;font-size:11px;letter-spacing:1px;font-weight:500;” onclick=“setState({authMode:‘login’,authErr:’’})”>ANMELDEN</button>
+<button style=“flex:1;padding:9px 0;background:${s.authMode===“register”?”#000”:”#fff”};color:${s.authMode===“register”?”#fff”:”#999”};border:none;font-size:11px;letter-spacing:1px;font-weight:500;” onclick=“setState({authMode:‘register’,authErr:’’})”>REGISTRIEREN</button>
+</div>
+<div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">NAME</label>
+<input style="${inp()}" placeholder="Vor- und Nachname" value="${s.authName}" oninput="setState({authName:this.value})" onkeydown="if(event.key==='Enter')submitUser()"/></div>
+<div style="margin-bottom:20px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">GEBURTSDATUM</label>
+<input type="date" style="${inp()}" value="${s.authBday}" oninput="setState({authBday:this.value})" onkeydown="if(event.key==='Enter')submitUser()"/></div>
+${s.authErr?`<div style="color:${C.danger};font-size:12px;margin-bottom:10px;">${s.authErr}</div>`:””}
+<button style=”${btnS(“primary”)}width:100%;padding:11px 0;font-size:12px;opacity:${s.authLoading?.5:1};” onclick=“submitUser()”>${s.authLoading?”…”:s.authMode===“login”?“ANMELDEN”:“KONTO ERSTELLEN”}</button>
+<div style="text-align:center;margin-top:20px;"><span style="font-size:11px;color:${C.muted};cursor:pointer;text-decoration:underline;" onclick="setState({authMode:'admin',authErr:''})">Admin-Zugang →</span></div>
+`} </div> </div>`;
+return;
 }
 
-// ── Auth screen ───────────────────────────────────────────────────────────
-function renderAuth() {
-const s = state;
-const isAdmin = s.authMode === “admin”;
-return `
-
-  <div style="min-height:100vh;background:${C.bg};display:flex;align-items:center;justify-content:center;">
-    <div style="width:380px;background:#fff;border:1px solid ${C.border};border-radius:14px;padding:40px 36px;box-shadow:0 2px 24px #0000000a;">
-      <div style="text-align:center;margin-bottom:28px;">
-        <div style="font-size:28px;margin-bottom:8px;">🧾</div>
-        <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:900;">Belegverwaltung</div>
-        <div style="font-size:10px;color:${C.muted};margin-top:4px;letter-spacing:1.5px;">DIGITAL · SICHER · ÜBERSICHTLICH</div>
-      </div>
-      ${isAdmin ? `
-        <div style="text-align:center;margin-bottom:20px;font-size:11px;color:${C.muted};letter-spacing:1px;">ADMIN-BEREICH</div>
-        <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">ADMIN-NAME</label>
-          <input id="aname" style="${inp()}" value="${s.aname}" oninput="setState({aname:this.value})" onkeydown="if(event.key==='Enter')submitAdmin()"/></div>
-        <div style="margin-bottom:20px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">PASSWORT</label>
-          <input id="apw" type="password" style="${inp()}" value="${s.apw}" oninput="setState({apw:this.value})" onkeydown="if(event.key==='Enter')submitAdmin()"/></div>
-        ${s.authErr?`<div style="color:${C.danger};font-size:12px;margin-bottom:10px;">${s.authErr}</div>`:""}
-        <button style="${btnStyle("primary")}width:100%;padding:11px 0;font-size:12px;letter-spacing:1px;" onclick="submitAdmin()">ALS ADMIN ANMELDEN</button>
-        <div style="text-align:center;margin-top:16px;"><span style="font-size:11px;color:${C.muted};cursor:pointer;text-decoration:underline;" onclick="setState({authMode:'login',authErr:''})">← Zurück</span></div>
-      ` : `
-        <div style="display:flex;margin-bottom:24px;border:1px solid ${C.border};border-radius:6px;overflow:hidden;">
-          <button style="flex:1;padding:9px 0;background:${s.authMode==="login"?"#000":"#fff"};color:${s.authMode==="login"?"#fff":"#999"};border:none;font-size:11px;letter-spacing:1px;font-weight:500;" onclick="setState({authMode:'login',authErr:''})">ANMELDEN</button>
-          <button style="flex:1;padding:9px 0;background:${s.authMode==="register"?"#000":"#fff"};color:${s.authMode==="register"?"#fff":"#999"};border:none;font-size:11px;letter-spacing:1px;font-weight:500;" onclick="setState({authMode:'register',authErr:''})">REGISTRIEREN</button>
-        </div>
-        <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">NAME</label>
-          <input style="${inp()}" placeholder="Vor- und Nachname" value="${s.authName}" oninput="setState({authName:this.value})" onkeydown="if(event.key==='Enter')submitUser()"/></div>
-        <div style="margin-bottom:20px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">GEBURTSDATUM</label>
-          <input type="date" style="${inp()}" value="${s.authBday}" oninput="setState({authBday:this.value})" onkeydown="if(event.key==='Enter')submitUser()"/></div>
-        ${s.authErr?`<div style="color:${C.danger};font-size:12px;margin-bottom:10px;">${s.authErr}</div>`:""}
-        <button style="${btnStyle("primary")}width:100%;padding:11px 0;font-size:12px;letter-spacing:1px;opacity:${s.authLoading?.5:1};" onclick="submitUser()">${s.authLoading?"…":s.authMode==="login"?"ANMELDEN":"KONTO ERSTELLEN"}</button>
-        <div style="text-align:center;margin-top:20px;"><span style="font-size:11px;color:${C.muted};cursor:pointer;text-decoration:underline;" onclick="setState({authMode:'admin',authErr:''})">Admin-Zugang →</span></div>
-      `}
-    </div>
-  </div>`;
+// USER LIST
+if(s.screen===“user_list”){
+const filtered=myBelege.filter(b=>{const q=s.search.toLowerCase();return !q||b.title.toLowerCase().includes(q)||(b.note||””).toLowerCase().includes(q)||b.belegNr.toLowerCase().includes(q);});
+const tCHF=myBelege.filter(b=>b.currency===“CHF”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0);
+const tEUR=myBelege.filter(b=>b.currency===“EUR”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0);
+app.innerHTML=` <div style="min-height:100vh;background:${C.bg};"> ${header("🧾 Belege",`<span style="font-size:11px;color:${C.muted};">👤 ${s.user.displayName}</span><button style=”${btnS(“ghost”)}” onclick=“setState({user:null,screen:‘auth’,search:’’})”>ABMELDEN</button><button style=”${btnS(“primary”)}” onclick=“setState({screen:‘user_add’})”>+ NEU</button>`)} <div style="max-width:660px;margin:0 auto;padding:22px 16px;" class="anim"> <div style="display:flex;gap:10px;margin-bottom:18px;"> ${[["BELEGE",myBelege.length],["TOTAL CHF","CHF "+tCHF.toFixed(2)],["TOTAL EUR","EUR "+tEUR.toFixed(2)]].map(([l,v])=>`
+<div style="flex:1;background:#fff;border:1px solid ${C.border};border-radius:8px;padding:12px 14px;">
+<div style="font-size:9px;color:${C.muted};letter-spacing:1.5px;margin-bottom:3px;">${l}</div>
+<div style="font-size:15px;font-weight:500;">${v}</div>
+</div>`).join("")} </div> <input placeholder="Suchen…" value="${s.search}" oninput="setState({search:this.value})" style="${inp("margin-bottom:14px;")}"/> ${filtered.length===0?`<div style="text-align:center;color:#ccc;font-size:13px;margin-top:50px;">${myBelege.length===0?“Noch keine Belege — erstelle deinen ersten!”:“Keine Treffer.”}</div>`:""} ${filtered.map(b=>`
+<div class="hcard" style="background:#fff;border:1px solid ${C.border};border-radius:10px;padding:13px 16px;cursor:pointer;margin-bottom:8px;transition:border-color .15s;" onclick='setState({selected:${JSON.stringify(b)},screen:"user_detail"})'>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;">
+<div style="flex:1;min-width:0;">
+<div style="font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+${b.title} ${b.verified?badge(“Verifiziert”,“green”):””} ${b.duplicate?badge(“Duplikat?”,“yellow”):””}
+</div>
+<div style="font-size:11px;color:${C.muted};display:flex;gap:10px;flex-wrap:wrap;">
+<span>${b.belegNr}</span><span>${fmtDate(b.date)}</span><span style="font-size:10px;color:#bbb;">Eingereicht ${fmtDT(b.submittedAt)}</span>
+</div>
+</div>
+<div style="font-size:14px;font-weight:500;margin-left:10px;white-space:nowrap;">${fmtAmt(b.amount,b.currency)}</div>
+</div>
+</div>`).join("")} </div> ${renderToast()} </div>`;
+return;
 }
 
-// ── User list ─────────────────────────────────────────────────────────────
-function renderUserList() {
-const s = state;
-if(s.loadingData) return `<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-size:12px;color:${C.muted};">Laden…</div>`;
-const filtered = s.belege.filter(b => {
-const q = s.search.toLowerCase();
-return !q || b.title.toLowerCase().includes(q) || (b.note||””).toLowerCase().includes(q) || b.beleg_nr.toLowerCase().includes(q);
-});
-const totalCHF = s.belege.filter(b=>b.currency===“CHF”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0);
-const totalEUR = s.belege.filter(b=>b.currency===“EUR”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0);
-return `
-
-  <div style="min-height:100vh;background:${C.bg};">
-    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">🧾 Belege</div>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:11px;color:${C.muted};">👤 ${s.user.displayName}</span>
-        <button style="${btnStyle("ghost")}" onclick="setState({user:null,screen:'auth',belege:[],search:''})">ABMELDEN</button>
-        <button style="${btnStyle("primary")}" onclick="setState({screen:'user_add'})">+ NEU</button>
-      </div>
-    </div>
-    <div style="max-width:660px;margin:0 auto;padding:22px 16px;" class="anim">
-      <div style="display:flex;gap:10px;margin-bottom:18px;">
-        ${[["BELEGE",s.belege.length],["TOTAL CHF","CHF "+totalCHF.toFixed(2)],["TOTAL EUR","EUR "+totalEUR.toFixed(2)]].map(([l,v])=>`
-        <div style="flex:1;background:#fff;border:1px solid ${C.border};border-radius:8px;padding:12px 14px;">
-          <div style="font-size:9px;color:${C.muted};letter-spacing:1.5px;margin-bottom:3px;">${l}</div>
-          <div style="font-size:15px;font-weight:500;">${v}</div>
-        </div>`).join("")}
-      </div>
-      <input placeholder="Suchen…" value="${s.search}" oninput="setState({search:this.value})" style="${inp("margin-bottom:14px;")}"/>
-      ${filtered.length===0?`<div style="text-align:center;color:#ccc;font-size:13px;margin-top:50px;">${s.belege.length===0?"Noch keine Belege — erstelle deinen ersten!":"Keine Treffer."}</div>`:""}
-      ${filtered.map(b=>`
-      <div class="hcard" style="background:#fff;border:1px solid ${C.border};border-radius:10px;padding:13px 16px;cursor:pointer;margin-bottom:8px;transition:border-color .15s;" onclick="setState({selected:${JSON.stringify(b).replace(/'/g,"&#39;")},screen:'user_detail'})">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              ${b.title} ${b.verified?badge("Verifiziert","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}
-            </div>
-            <div style="font-size:11px;color:${C.muted};display:flex;gap:10px;flex-wrap:wrap;">
-              <span>${b.beleg_nr}</span><span>${fmtDate(b.date)}</span><span style="font-size:10px;color:#bbb;">Eingereicht ${fmtDT(b.submitted_at)}</span>
-            </div>
-          </div>
-          <div style="font-size:14px;font-weight:500;margin-left:10px;white-space:nowrap;">${fmtAmt(b.amount,b.currency)}</div>
-        </div>
-      </div>`).join("")}
-    </div>
-    ${renderToast()}
-  </div>`;
+// USER ADD
+if(s.screen===“user_add”){
+app.innerHTML=` <div style="min-height:100vh;background:${C.bg};"> ${header("🧾 Belege",`<span style="font-size:11px;color:${C.muted};">👤 ${s.user.displayName}</span><button style=”${btnS(“ghost”)}” onclick=“setState({screen:‘user_list’,title:’’,amount:’’,note:’’,file:null,fileSrc:null})”>← ZURÜCK</button>`)} <div style="max-width:500px;margin:0 auto;padding:26px 16px;" class="anim"> <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:900;margin-bottom:22px;">Neuer Beleg</div> <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">TITEL *</label> <input style="${inp()}" value="${s.title}" oninput="setState({title:this.value})" placeholder="z.B. Rewe Einkauf"/></div> <div style="display:flex;gap:10px;margin-bottom:14px;"> <div style="flex:1;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">BETRAG</label> <input type="number" step="0.01" style="${inp()}" value="${s.amount}" oninput="setState({amount:this.value})" placeholder="0.00"/></div> <div style="width:90px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">WÄHRUNG</label> <select style="${inp()}" onchange="setState({currency:this.value})"><option ${s.currency==="CHF"?"selected":""}>CHF</option><option ${s.currency==="EUR"?"selected":""}>EUR</option></select></div> </div> <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">DATUM</label> <input type="date" style="${inp()}" value="${s.date}" oninput="setState({date:this.value})"/></div> <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">NOTIZ</label> <textarea style="${inp("height:68px;resize:vertical;")}" oninput="setState({note:this.value})" placeholder="Optional…">${s.note}</textarea></div> <div style="margin-bottom:22px;"> <label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">DATEI (FOTO / PDF / HTML)</label> <div style="border:1px dashed ${C.border};border-radius:6px;padding:18px;text-align:center;cursor:pointer;color:#ccc;font-size:12px;background:#fff;" onmouseenter="this.style.borderColor='#000'" onmouseleave="this.style.borderColor='${C.border}'" onclick="document.getElementById('fi').click()"> ${s.file?`<span style="color:#000;">📎 ${s.file.name}</span>`:"Foto, PDF oder HTML-Beleg auswählen"} </div> <input id="fi" type="file" accept="image/*,application/pdf,text/html,.html" style="display:none;" onchange="handleFileChange(event)"/> ${s.fileSrc?renderFilePreview(s.fileSrc,s.file?.name):""} </div> <button style="${btnS("primary")}width:100%;padding:12px 0;font-size:12px;opacity:${s.saving?.5:1};" onclick="addBeleg()">${s.saving?"Speichert…":"BELEG EINREICHEN"}</button> </div> ${renderToast()} </div>`;
+return;
 }
 
-// ── User add ──────────────────────────────────────────────────────────────
-function renderUserAdd() {
-const s = state;
-return `
-
-  <div style="min-height:100vh;background:${C.bg};">
-    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">🧾 Belege</div>
-      <div style="display:flex;gap:10px;">
-        <span style="font-size:11px;color:${C.muted};">👤 ${s.user.displayName}</span>
-        <button style="${btnStyle("ghost")}" onclick="setState({screen:'user_list',title:'',amount:'',note:'',file:null,fileSrc:null})">← ZURÜCK</button>
-      </div>
-    </div>
-    <div style="max-width:500px;margin:0 auto;padding:26px 16px;" class="anim">
-      <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:900;margin-bottom:22px;">Neuer Beleg</div>
-      <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">TITEL *</label>
-        <input style="${inp()}" value="${s.title}" oninput="setState({title:this.value})" placeholder="z.B. Rewe Einkauf"/></div>
-      <div style="display:flex;gap:10px;margin-bottom:14px;">
-        <div style="flex:1;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">BETRAG</label>
-          <input type="number" step="0.01" style="${inp()}" value="${s.amount}" oninput="setState({amount:this.value})" placeholder="0.00"/></div>
-        <div style="width:90px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">WÄHRUNG</label>
-          <select style="${inp()}" onchange="setState({currency:this.value})"><option ${s.currency==="CHF"?"selected":""}>CHF</option><option ${s.currency==="EUR"?"selected":""}>EUR</option></select></div>
-      </div>
-      <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">DATUM</label>
-        <input type="date" style="${inp()}" value="${s.date}" oninput="setState({date:this.value})"/></div>
-      <div style="margin-bottom:14px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">NOTIZ</label>
-        <textarea style="${inp("height:68px;resize:vertical;")}" oninput="setState({note:this.value})" placeholder="Optional…">${s.note}</textarea></div>
-      <div style="margin-bottom:22px;">
-        <label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">DATEI (FOTO / PDF / HTML)</label>
-        <div style="border:1px dashed ${C.border};border-radius:6px;padding:18px;text-align:center;cursor:pointer;color:#ccc;font-size:12px;background:#fff;"
-          onmouseenter="this.style.borderColor='#000'" onmouseleave="this.style.borderColor='${C.border}'"
-          onclick="document.getElementById('fileInput').click()">
-          ${s.file?`<span style="color:#000;">📎 ${s.file.name}</span>`:"Foto, PDF oder HTML-Beleg auswählen"}
-        </div>
-        <input id="fileInput" type="file" accept="image/*,application/pdf,text/html,.html" style="display:none;" onchange="handleFileChange(event)"/>
-        ${s.fileSrc?renderFilePreview(s.fileSrc,s.file?.name):""}
-      </div>
-      <button style="${btnStyle("primary")}width:100%;padding:12px 0;font-size:12px;letter-spacing:1px;opacity:${s.saving?.5:1};" onclick="addBeleg()">${s.saving?"Speichert…":"BELEG EINREICHEN"}</button>
-    </div>
-    ${renderToast()}
-  </div>`;
+// USER DETAIL
+if(s.screen===“user_detail”){
+const b=s.selected;
+app.innerHTML=` <div style="min-height:100vh;background:${C.bg};"> ${header("🧾 Belege",`<button style=”${btnS(“ghost”)}” onclick=“setState({screen:‘user_list’})”>← ZURÜCK</button>`)} <div style="max-width:500px;margin:0 auto;padding:26px 16px;" class="anim"> <div style="font-family:'Playfair Display',serif;font-size:21px;font-weight:900;margin-bottom:4px;">${b.title}</div> <div style="font-size:11px;color:${C.muted};margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"> <span>${b.belegNr}</span><span>${fmtDate(b.date)}</span> ${b.verified?badge("Verifiziert","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""} </div> <div style="background:#fff;border:1px solid ${C.border};border-radius:10px;padding:16px;margin-bottom:18px;"> ${[["BELEGNUMMER",b.belegNr],["BETRAG",fmtAmt(b.amount,b.currency)],["DATUM",fmtDate(b.date)],["EINGEREICHT AM",fmtDT(b.submittedAt)],...(b.note?[["NOTIZ",b.note]]:[])].map(([l,v])=>`
+<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid ${C.border};">
+<span style="font-size:10px;color:${C.muted};letter-spacing:1.2px;">${l}</span>
+<span style="font-size:13px;">${v}</span>
+</div>`).join("")} </div> ${b.fileSrc?`<div style="margin-bottom:18px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">ANHANG</label>${renderFilePreview(b.fileSrc,b.fileName)}</div>`:""} </div> </div>`;
+return;
 }
 
-// ── User detail ───────────────────────────────────────────────────────────
-function renderUserDetail() {
-const b = state.selected; if(!b) return “”;
-return `
-
-  <div style="min-height:100vh;background:${C.bg};">
-    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:900;">🧾 Belege</div>
-      <button style="${btnStyle("ghost")}" onclick="setState({screen:'user_list'})">← ZURÜCK</button>
-    </div>
-    <div style="max-width:500px;margin:0 auto;padding:26px 16px;" class="anim">
-      <div style="font-family:'Playfair Display',serif;font-size:21px;font-weight:900;margin-bottom:4px;">${b.title}</div>
-      <div style="font-size:11px;color:${C.muted};margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <span>${b.beleg_nr}</span><span>${fmtDate(b.date)}</span>
-        ${b.verified?badge("Verifiziert","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}
-      </div>
-      <div style="background:#fff;border:1px solid ${C.border};border-radius:10px;padding:16px;margin-bottom:18px;">
-        ${[["BELEGNUMMER",b.beleg_nr],["BETRAG",fmtAmt(b.amount,b.currency)],["DATUM",fmtDate(b.date)],["EINGEREICHT AM",fmtDT(b.submitted_at)],...(b.note?[["NOTIZ",b.note]]:[])].map(([l,v])=>`
-        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid ${C.border};">
-          <span style="font-size:10px;color:${C.muted};letter-spacing:1.2px;">${l}</span>
-          <span style="font-size:13px;">${v}</span>
-        </div>`).join("")}
-      </div>
-      ${b.file_src?`<div style="margin-bottom:18px;"><label style="font-size:10px;color:${C.muted};letter-spacing:1.4px;margin-bottom:5px;display:block;">ANHANG</label>${renderFilePreview(b.file_src,b.file_name)}</div>`:""}
-    </div>
-  </div>`;
-}
-
-// ── Admin ─────────────────────────────────────────────────────────────────
-function renderAdmin() {
-const s = state;
-if(s.loadingData) return `<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-size:12px;color:${C.muted};">Laden…</div>`;
-
-const filtered = s.belege.filter(b=>{
+// ADMIN
+if(s.screen===“admin_belege”||s.screen===“admin_users”){
+if(s.loadingData){app.innerHTML=`<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;font-size:12px;color:${C.muted};">Laden…</div>`;return;}
+const filtered=allBelege.filter(b=>{
 const q=s.search.toLowerCase();
-const mQ=!q||b.title.toLowerCase().includes(q)||b.beleg_nr.toLowerCase().includes(q)||b.user_name.toLowerCase().includes(q);
+const mQ=!q||b.title.toLowerCase().includes(q)||b.belegNr.toLowerCase().includes(q)||(b.userName||””).toLowerCase().includes(q);
 const mS=s.filterStatus===“Alle”||(s.filterStatus===“Verifiziert”&&b.verified)||(s.filterStatus===“Ungeprüft”&&!b.verified)||(s.filterStatus===“Duplikat”&&b.duplicate);
 return mQ&&mS;
-}).sort((a,b)=>new Date(b.submitted_at)-new Date(a.submitted_at));
-
-const stats = [
-[“BELEGE GESAMT”,s.belege.length,false],
-[“UNGEPRÜFT”,s.belege.filter(b=>!b.verified).length,s.belege.filter(b=>!b.verified).length>0],
-[“DUPLIKATE”,s.belege.filter(b=>b.duplicate).length,s.belege.filter(b=>b.duplicate).length>0],
-[“TOTAL CHF”,“CHF “+s.belege.filter(b=>b.currency===“CHF”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2),false],
-[“TOTAL EUR”,“EUR “+s.belege.filter(b=>b.currency===“EUR”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2),false],
-];
-
-const sel = s.selected;
-
-return `
-
-  <div style="min-height:100vh;background:#f0f0f0;">
-    <div style="background:#000;padding:13px 20px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="font-family:'Playfair Display',serif;font-size:16px;font-weight:900;color:#fff;">🔐 Admin — ${s.admin.name}</div>
-      <div style="display:flex;gap:8px;">
-        <button style="${btnStyle("ghost")}font-size:11px;padding:6px 12px;" onclick="loadAdminData()">↻</button>
-        <button style="${btnStyle("ghost")}font-size:11px;padding:6px 12px;" onclick="setState({admin:null,screen:'auth',belege:[],users:[]})">ABMELDEN</button>
-      </div>
-    </div>
-    <div style="background:#fff;border-bottom:1px solid ${C.border};padding:0 20px;display:flex;">
-      <button onclick="setState({screen:'admin_belege',selected:null})" style="padding:12px 20px;background:transparent;border:none;border-bottom:${s.screen==="admin_belege"?"2px solid #000":"2px solid transparent"};font-size:11px;letter-spacing:1px;color:${s.screen==="admin_belege"?"#000":"#999"};font-weight:${s.screen==="admin_belege"?500:400};">BELEGE</button>
-      <button onclick="setState({screen:'admin_users',selected:null})" style="padding:12px 20px;background:transparent;border:none;border-bottom:${s.screen==="admin_users"?"2px solid #000":"2px solid transparent"};font-size:11px;letter-spacing:1px;color:${s.screen==="admin_users"?"#000":"#999"};font-weight:${s.screen==="admin_users"?500:400};">NUTZERKONTEN</button>
-    </div>
-    <div style="max-width:900px;margin:0 auto;padding:18px 16px 0;">
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
-        ${stats.map(([l,v,w])=>`
-        <div style="flex:1 1 110px;background:#fff;border:1px solid ${w?"#f5dba0":C.border};border-radius:8px;padding:11px 14px;">
-          <div style="font-size:9px;color:${w?"#b86800":C.muted};letter-spacing:1.5px;margin-bottom:3px;">${l}</div>
-          <div style="font-size:15px;font-weight:500;color:${w?"#b86800":"#000"};">${v}</div>
-        </div>`).join("")}
-      </div>
-    </div>
-
-```
-${s.screen==="admin_belege"?`
+}).sort((a,b)=>new Date(b.submittedAt)-new Date(a.submittedAt));
+const sel=s.selected;
+const stats=[[“BELEGE GESAMT”,allBelege.length,false],[“UNGEPRÜFT”,allBelege.filter(b=>!b.verified).length,allBelege.filter(b=>!b.verified).length>0],[“DUPLIKATE”,allBelege.filter(b=>b.duplicate).length,allBelege.filter(b=>b.duplicate).length>0],[“TOTAL CHF”,“CHF “+allBelege.filter(b=>b.currency===“CHF”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2),false],[“TOTAL EUR”,“EUR “+allBelege.filter(b=>b.currency===“EUR”).reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2),false]];
+app.innerHTML=` <div style="min-height:100vh;background:#f0f0f0;"> <div style="background:#000;padding:13px 20px;display:flex;align-items:center;justify-content:space-between;"> <div style="font-family:'Playfair Display',serif;font-size:16px;font-weight:900;color:#fff;">🔐 Admin — ${s.admin.name}</div> <div style="display:flex;gap:8px;"> <button style="${btnS("ghost")}font-size:11px;padding:6px 12px;" onclick="setState({loadingData:true});ghGet().then(db=>{DB=db;setState({loadingData:false});})">↻</button> <button style="${btnS("ghost")}font-size:11px;padding:6px 12px;" onclick="setState({admin:null,screen:'auth'})">ABMELDEN</button> </div> </div> <div style="background:#fff;border-bottom:1px solid ${C.border};padding:0 20px;display:flex;"> <button onclick="setState({screen:'admin_belege',selected:null})" style="padding:12px 20px;background:transparent;border:none;border-bottom:${s.screen==="admin_belege"?"2px solid #000":"2px solid transparent"};font-size:11px;letter-spacing:1px;color:${s.screen==="admin_belege"?"#000":"#999"};font-weight:${s.screen==="admin_belege"?500:400};">BELEGE</button> <button onclick="setState({screen:'admin_users',selected:null})" style="padding:12px 20px;background:transparent;border:none;border-bottom:${s.screen==="admin_users"?"2px solid #000":"2px solid transparent"};font-size:11px;letter-spacing:1px;color:${s.screen==="admin_users"?"#000":"#999"};font-weight:${s.screen==="admin_users"?500:400};">NUTZERKONTEN</button> </div> <div style="max-width:900px;margin:0 auto;padding:18px 16px 0;"> <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;"> ${stats.map(([l,v,w])=>`<div style=“flex:1 1 110px;background:#fff;border:1px solid ${w?”#f5dba0”:C.border};border-radius:8px;padding:11px 14px;”><div style=“font-size:9px;color:${w?”#b86800”:C.muted};letter-spacing:1.5px;margin-bottom:3px;”>${l}</div><div style=“font-size:15px;font-weight:500;color:${w?”#b86800”:”#000”};”>${v}</div></div>`).join("")} </div> </div> ${s.screen==="admin_belege"?`
 <div style="max-width:900px;margin:0 auto;padding:0 16px 30px;display:flex;gap:14px;">
-  <div style="flex:1;min-width:0;">
-    <div style="display:flex;gap:8px;margin-bottom:12px;">
-      <input value="${s.search}" oninput="setState({search:this.value})" placeholder="Suchen…" style="${inp("flex:1;")}"/>
-      <select onchange="setState({filterStatus:this.value})" style="${inp("width:auto;background:#fff;")}">
-        ${["Alle","Ungeprüft","Verifiziert","Duplikat"].map(x=>`<option ${s.filterStatus===x?"selected":""}>${x}</option>`).join("")}
-      </select>
-    </div>
-    ${filtered.map(b=>`
-    <div class="hcard" onclick="setState({selected:${JSON.stringify(b).replace(/"/g,'&quot;')}})" style="background:#fff;border:1px solid ${sel?.id===b.id?"#000":C.border};border-radius:9px;padding:11px 14px;cursor:pointer;margin-bottom:7px;transition:border-color .15s;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:12px;margin-bottom:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            ${b.title} ${b.verified?badge("✓","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}
-          </div>
-          <div style="font-size:10px;color:${C.muted};display:flex;gap:8px;flex-wrap:wrap;">
-            <span>${b.beleg_nr}</span><span>${b.user_name}</span><span>${fmtDT(b.submitted_at)}</span>
-          </div>
-        </div>
-        <div style="font-size:13px;font-weight:500;margin-left:8px;white-space:nowrap;">${fmtAmt(b.amount,b.currency)}</div>
-      </div>
-    </div>`).join("")}
-  </div>
-  ${sel?`
-  <div style="width:270px;background:#fff;border:1px solid ${C.border};border-radius:10px;padding:16px;height:fit-content;position:sticky;top:16px;">
-    <div style="font-family:'Playfair Display',serif;font-size:15px;font-weight:900;margin-bottom:3px;">${sel.title}</div>
-    <div style="font-size:11px;color:${C.muted};margin-bottom:12px;">${sel.beleg_nr} · ${sel.user_name}</div>
-    ${[["BETRAG",fmtAmt(sel.amount,sel.currency)],["DATUM",fmtDate(sel.date)],["EINGEREICHT",fmtDT(sel.submitted_at)],...(sel.note?[["NOTIZ",sel.note]]:[])].map(([l,v])=>`
-    <div style="padding:5px 0;border-bottom:1px solid ${C.border};">
-      <div style="font-size:9px;color:${C.muted};letter-spacing:1.2px;margin-bottom:2px;">${l}</div>
-      <div style="font-size:12px;">${v}</div>
-    </div>`).join("")}
-    ${sel.file_src?`<div style="margin-top:10px;"><div style="font-size:9px;color:${C.muted};letter-spacing:1.2px;margin-bottom:6px;">ANHANG</div>${renderFilePreview(sel.file_src,sel.file_name)}</div>`:""}
-    <div style="margin-top:14px;display:flex;flex-direction:column;gap:7px;">
-      <button style="${btnStyle(sel.verified?"warn":"ok")}width:100%;text-align:center;" onclick="toggleVerify('${sel.id}')">${sel.verified?"Verifizierung aufheben":"✓ Als verifiziert markieren"}</button>
-      <button style="${btnStyle("warn")}width:100%;text-align:center;" onclick="toggleDup('${sel.id}')">${sel.duplicate?"Duplikat entfernen":"⚠ Als Duplikat markieren"}</button>
-      <button style="${btnStyle("danger")}width:100%;text-align:center;" onclick="handleDelBeleg('${sel.id}')">🗑 Löschen</button>
-    </div>
-  </div>`:""
-}
-</div>`:""
-}
-
-${s.screen==="admin_users"?`
+<div style="flex:1;min-width:0;">
+<div style="display:flex;gap:8px;margin-bottom:12px;">
+<input value=”${s.search}” oninput=“setState({search:this.value})” placeholder=“Suchen…” style=”${inp(“flex:1;”)}”/>
+<select onchange=“setState({filterStatus:this.value})” style=”${inp(“width:auto;”)}”>
+${[“Alle”,“Ungeprüft”,“Verifiziert”,“Duplikat”].map(x=>`<option ${s.filterStatus===x?"selected":""}>${x}</option>`).join(””)}
+</select>
+</div>
+${filtered.map(b=>` <div class="hcard" onclick='setState({selected:${JSON.stringify(b)}})' style="background:#fff;border:1px solid ${sel?.id===b.id?"#000":C.border};border-radius:9px;padding:11px 14px;cursor:pointer;margin-bottom:7px;transition:border-color .15s;"> <div style="display:flex;justify-content:space-between;"> <div style="flex:1;min-width:0;"> <div style="font-size:12px;margin-bottom:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${b.title} ${b.verified?badge("✓","green"):""} ${b.duplicate?badge("Duplikat?","yellow"):""}</div> <div style="font-size:10px;color:${C.muted};display:flex;gap:8px;flex-wrap:wrap;"><span>${b.belegNr}</span><span>${b.userName}</span><span>${fmtDT(b.submittedAt)}</span></div> </div> <div style="font-size:13px;font-weight:500;margin-left:8px;white-space:nowrap;">${fmtAmt(b.amount,b.currency)}</div> </div> </div>`).join(””)}
+</div>
+${sel?` <div style="width:270px;background:#fff;border:1px solid ${C.border};border-radius:10px;padding:16px;height:fit-content;position:sticky;top:16px;"> <div style="font-family:'Playfair Display',serif;font-size:15px;font-weight:900;margin-bottom:3px;">${sel.title}</div> <div style="font-size:11px;color:${C.muted};margin-bottom:12px;">${sel.belegNr} · ${sel.userName}</div> ${[["BETRAG",fmtAmt(sel.amount,sel.currency)],["DATUM",fmtDate(sel.date)],["EINGEREICHT",fmtDT(sel.submittedAt)],...(sel.note?[["NOTIZ",sel.note]]:[])].map(([l,v])=>`<div style="padding:5px 0;border-bottom:1px solid ${C.border};"><div style="font-size:9px;color:${C.muted};letter-spacing:1.2px;margin-bottom:2px;">${l}</div><div style="font-size:12px;">${v}</div></div>`).join("")} ${sel.fileSrc?`<div style="margin-top:10px;"><div style="font-size:9px;color:${C.muted};letter-spacing:1.2px;margin-bottom:6px;">ANHANG</div>${renderFilePreview(sel.fileSrc,sel.fileName)}</div>`:""} <div style="margin-top:14px;display:flex;flex-direction:column;gap:7px;"> <button style="${btnS(sel.verified?"warn":"ok")}width:100%;text-align:center;" onclick="toggleVerify('${sel.id}')">${sel.verified?"Verifizierung aufheben":"✓ Als verifiziert markieren"}</button> <button style="${btnS("warn")}width:100%;text-align:center;" onclick="toggleDup('${sel.id}')">${sel.duplicate?"Duplikat entfernen":"⚠ Als Duplikat markieren"}</button> <button style="${btnS("danger")}width:100%;text-align:center;" onclick="handleDelBeleg('${sel.id}')">🗑 Löschen</button> </div> </div>`:””}
+</div>`:""} ${s.screen==="admin_users"?`
 <div style="max-width:620px;margin:0 auto;padding:0 16px 30px;">
-  ${s.users.map(u=>{
-    const uB=s.belege.filter(b=>b.user_id===u.id);
-    return `<div style="background:#fff;border:1px solid ${C.border};border-radius:9px;padding:13px 16px;margin-bottom:8px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-size:13px;margin-bottom:3px;">${u.display_name}</div>
-          <div style="font-size:10px;color:${C.muted};display:flex;gap:10px;flex-wrap:wrap;">
-            <span>Geb. ${fmtDate(u.bday)}</span><span>${uB.length} Belege</span>
-            <span>CHF ${uB.filter(b=>b.currency==="CHF").reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2)}</span>
-            <span>EUR ${uB.filter(b=>b.currency==="EUR").reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2)}</span>
-          </div>
-        </div>
-        <button style="${btnStyle("danger")}font-size:11px;padding:6px 12px;" onclick="handleDelUser('${u.id}','${u.display_name}')">Löschen</button>
-      </div>
-    </div>`;
-  }).join("")}
-</div>`:""
+${allUsers.map(u=>{const uB=allBelege.filter(b=>b.userId===u.id);return` <div style="background:#fff;border:1px solid ${C.border};border-radius:9px;padding:13px 16px;margin-bottom:8px;"> <div style="display:flex;justify-content:space-between;align-items:center;"> <div> <div style="font-size:13px;margin-bottom:3px;">${u.displayName}</div> <div style="font-size:10px;color:${C.muted};display:flex;gap:10px;flex-wrap:wrap;"> <span>Geb. ${fmtDate(u.bday)}</span><span>${uB.length} Belege</span> <span>CHF ${uB.filter(b=>b.currency==="CHF").reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2)}</span> <span>EUR ${uB.filter(b=>b.currency==="EUR").reduce((a,b)=>a+(parseFloat(b.amount)||0),0).toFixed(2)}</span> </div> </div> <button style="${btnS("danger")}font-size:11px;padding:6px 12px;" onclick="handleDelUser('${u.id}','${u.displayName}')">Löschen</button> </div> </div>`;}).join(””)}
+</div>`:""} ${renderToast()} </div>`;
+return;
 }
-${renderToast()}
-```
-
-  </div>`;
-}
-
-function renderFilePreview(src, name) {
-if(!src) return “”;
-if(src.startsWith(“data:application/pdf”)) return `<a href="${src}" download="${name||'beleg.pdf'}" style="color:#000;font-size:12px;text-decoration:underline;">📄 PDF herunterladen</a>`;
-if(src.startsWith(“data:text/html”)||(name||””).endsWith(”.html”)) {
-let h=””; try{h=atob(src.split(”,”)[1]);}catch{}
-return `<iframe srcdoc="${h.replace(/"/g,'&quot;')}" style="width:100%;height:300px;border:1px solid ${C.border};border-radius:6px;margin-top:8px;" sandbox="allow-same-origin"></iframe>`;
-}
-return `<img src="${src}" style="max-width:100%;max-height:200px;border-radius:4px;margin-top:8px;border:1px solid ${C.border};object-fit:contain;"/>`;
-}
-
-function renderToast() {
-if(!state.toast) return “”;
-return `<div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#000;color:#fff;padding:10px 22px;border-radius:99px;font-size:12px;z-index:999;box-shadow:0 4px 20px #0002;white-space:nowrap;">${state.toast}</div>`;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
